@@ -1,0 +1,36 @@
+// Kervly — Cloudflare Workers configuration (template).
+// The resource ids below are placeholders that work for local development (`npm run dev`).
+// For deployment, scripts/render-config.mjs writes wrangler.deploy.json from these defaults plus
+// your own values from environment variables / GitHub repository variables (see docs/SELF_HOSTING.md).
+// Secrets are NEVER stored here: set them with `wrangler secret put` or in the Cloudflare dashboard.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "kervly",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "observability": { "enabled": true },
+  // Process the publishing queue every 5 minutes
+  "triggers": { "crons": ["*/5 * * * *"] },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "kervly-db", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations" }
+  ],
+  "kv_namespaces": [
+    { "binding": "OAUTH_KV", "id": "00000000000000000000000000000001" },
+    { "binding": "SESSIONS", "id": "00000000000000000000000000000002" }
+  ],
+  "vars": {
+    // Hosts a brand's video allowlist may point to (comma separated). Hard ceiling.
+    "MEDIA_ALLOWED_HOSTS": "raw.githubusercontent.com",
+    // Upper bound for a brand's daily per-platform limit
+    "MAX_POSTS_PER_DAY_CEILING": "10",
+    "DEFAULT_TIMEZONE": "UTC",
+    // "en" or "tr"
+    "DEFAULT_LANG": "en",
+    "MCP_LANG": "en",
+    "INSTAGRAM_API_VERSION": "v23.0",
+    // Set to "false" once your TikTok app has passed the Content Posting API audit
+    "TIKTOK_UNAUDITED": "true"
+  }
+}

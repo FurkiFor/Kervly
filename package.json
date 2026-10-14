@@ -1,0 +1,39 @@
+{
+  "name": "kervly",
+  "version": "0.1.0",
+  "description": "Self-hosted, multi-brand video scheduler for YouTube Shorts, Instagram Reels and TikTok — with an MCP server. Runs free on Cloudflare Workers.",
+  "license": "AGPL-3.0-only",
+  "homepage": "https://kervly.app",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/FurkiFor/Kervly.git"
+  },
+  "keywords": [
+    "mcp",
+    "youtube",
+    "instagram",
+    "tiktok",
+    "scheduler",
+    "cloudflare-workers",
+    "social-media"
+  ],
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "typecheck": "tsc",
+    "test": "vitest run",
+    "e2e": "node test/e2e.mjs",
+    "check": "tsc && vitest run && wrangler deploy --dry-run --outdir .wrangler/dry",
+    "render-config": "node scripts/render-config.mjs"
+  },
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "^1.2.3"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261014.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.4",
+    "wrangler": "^4.151.0"
+  }
+}

@@ -1,0 +1,7 @@
+# Extends the default rules. The test fixtures below are fake values.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test fixtures and placeholders"
+paths = ['''test/.*''', '''\.dev\.vars\.example''']

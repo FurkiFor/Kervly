@@ -1,0 +1,6 @@
+# Local development only. Real values go into Cloudflare secrets, never into git.
+# Generate them at http://localhost:8787/setup after `npm run dev`.
+ADMIN_PASSWORD_HASH=""
+ADMIN_TOTP_SECRET=""
+ENCRYPTION_KEY=""
+CONSENT_SECRET=""
