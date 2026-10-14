@@ -12,8 +12,15 @@ interface TikTokEnvelope<T> {
 }
 
 async function tt<T>(step: Step, r: Response): Promise<T> {
-  if (!r.ok) throw await apiError("TikTok", step, r);
-  const j = (await r.json()) as TikTokEnvelope<T>;
+  let j: TikTokEnvelope<T>;
+  if (!r.ok) {
+    // TikTok answers 403 with a JSON error body; read it so the unaudited-app case gets its own message
+    const body = (await r.clone().json().catch(() => null)) as TikTokEnvelope<T> | null;
+    if (body?.error?.code !== "unaudited_client_can_only_post_to_private_accounts") throw await apiError("TikTok", step, r);
+    j = body;
+  } else {
+    j = (await r.json()) as TikTokEnvelope<T>;
+  }
   if (j.error && j.error.code !== "ok") {
     const retry = ["rate_limit_exceeded", "internal_error"].includes(j.error.code);
     const base = new PlatformError("pf.tt_api", { step: `@step.${step}`, code: j.error.code, message: j.error.message }, retry);

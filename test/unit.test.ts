@@ -3,6 +3,8 @@ import { b64, base32Encode, decryptJson, encryptJson, hashPassword, totpAt, veri
 import { validateMediaUrl, validatePrefix } from "../src/media";
 import { esc, safeNext, zonedToUtc } from "../src/http";
 import { validateNewPost } from "../src/db";
+import { apiError } from "../src/platforms/types";
+import { tiktok } from "../src/platforms/tiktok";
 import { AppError, format, localize, renderStored, storeMsg } from "../src/i18n";
 
 const HOSTS = "raw.githubusercontent.com";
@@ -153,5 +155,39 @@ describe("accounts", () => {
   it("normalizes emails", () => {
     expect(normalizeEmail("  Me@Example.COM ")).toBe("me@example.com");
     for (const bad of ["", "a", "a@b", "a b@c.com", "<x>@y.com"]) expect(() => normalizeEmail(bad)).toThrow();
+  });
+});
+
+describe("platform errors", () => {
+  it("keeps an API error code but hides tokens", async () => {
+    const r = new Response('{"error":{"code":"spam_risk","message":"x"},"access_token":"SECRET123","refresh_token":"R-1"}', { status: 403 });
+    const e = await apiError("TikTok", "upload_init", r);
+    const detail = String((e as unknown as { params: Record<string, unknown> }).params.detail);
+    expect(detail).toContain("spam_risk");
+    expect(detail).not.toContain("SECRET123");
+    expect(detail).not.toContain("R-1");
+  });
+  it("hides OAuth codes in form bodies", async () => {
+    const e = await apiError("TikTok", "token_exchange", new Response("grant_type=x&code=abc123&state=s", { status: 400 }));
+    expect(String((e as unknown as { params: Record<string, unknown> }).params.detail)).not.toContain("abc123");
+  });
+  it("maps TikTok's unaudited 403 to a helpful message", async () => {
+    const orig = globalThis.fetch;
+    const calls: string[] = [];
+    globalThis.fetch = (async (url: string) => {
+      calls.push(String(url));
+      if (String(url).includes("creator_info")) return Response.json({ data: { privacy_level_options: ["SELF_ONLY"] }, error: { code: "ok", message: "" } });
+      return Response.json({ error: { code: "unaudited_client_can_only_post_to_private_accounts", message: "Please review our integration guidelines" } }, { status: 403 });
+    }) as typeof fetch;
+    try {
+      const post = { options: "{}", caption: "c", title: "t", media_url: "u", media_open: async () => ({ body: new Response("x").body!, size: 1 }) } as never;
+      const err = await tiktok.start({ TIKTOK_UNAUDITED: "true" } as never, post, { tokens: { access_token: "a" } } as never).catch((e) => e);
+      expect(err).toBeInstanceOf(AppError);
+      expect(localize(err, "en")).toContain("must be set to private");
+      expect(localize(err, "tr")).toContain("Gizli hesap");
+    } finally {
+      globalThis.fetch = orig;
+    }
+    expect(calls.length).toBe(2);
   });
 });

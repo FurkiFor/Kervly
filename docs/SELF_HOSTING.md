@@ -138,6 +138,9 @@ Requirement: a **professional** Instagram account (Business or Creator).
 6. Dashboard → select brand → TikTok → **Connect**.
 7. **Audit:** until the Content Posting API audit is approved, TikTok only allows private (`SELF_ONLY`) posts. Kervly enforces this
    while `TIKTOK_UNAUDITED=true`. Set the variable to `false` after approval.
+   Unaudited apps also require the posting TikTok **account itself** to be private (TikTok app → Settings and privacy → Privacy →
+   Private account), otherwise TikTok rejects the upload with HTTP 403 `unaudited_client_can_only_post_to_private_accounts`.
+   Use a private test account until the audit passes.
 
 ## 10. Connect your AI agent (MCP)
 

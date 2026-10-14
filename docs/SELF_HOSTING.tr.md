@@ -136,6 +136,9 @@ ekleyebilirsiniz. Kervly yalnızca markanın depolama klasöründeki veya bu ön
 6. Panel → marka seçin → TikTok → **Bağla**.
 7. **Denetim:** Content Posting API denetimi onaylanana kadar TikTok sadece gizli (`SELF_ONLY`) paylaşıma izin verir.
    `TIKTOK_UNAUDITED=true` iken Kervly bunu zorunlu kılar. Onaydan sonra değişkeni `false` yapın.
+   Denetimsiz uygulamalar ayrıca paylaşım yapan TikTok **hesabının kendisinin** gizli olmasını ister (TikTok uygulaması → Ayarlar ve
+   gizlilik → Gizlilik → Gizli hesap). Aksi halde TikTok yüklemeyi HTTP 403 `unaudited_client_can_only_post_to_private_accounts`
+   ile reddeder. Denetim bitene kadar gizli bir test hesabı kullanın.
 
 ## 10. Yapay zekâ ajanını bağlama (MCP)
 

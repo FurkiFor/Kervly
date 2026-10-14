@@ -45,7 +45,11 @@ export async function apiError(platform: string, step: Step, r: Response): Promi
   let detail = "";
   try {
     const t = await r.text();
-    detail = t.slice(0, 300).replace(/(access_token|refresh_token|client_secret|code)["=:\s]+[^"&\s,}]+/gi, "$1=***");
+    detail = t
+      .slice(0, 300)
+      // Token-like keys are hidden; an API error's own "code" field is kept because it explains the failure
+      .replace(/(access_token|refresh_token|client_secret)["=:\s]+[^"&\s,}]+/gi, "$1=***")
+      .replace(/(^|[?&\s])code=[^&\s]+/g, "$1code=***");
   } catch {
     /* ignore */
   }

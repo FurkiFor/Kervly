@@ -168,8 +168,8 @@ const MESSAGES = {
   "pf.ig_no_id": { en: "Instagram did not return a media id", tr: "Instagram yayın kimliği dönmedi" },
   "pf.tt_api": { en: "TikTok {step}: {code} {message}", tr: "TikTok {step}: {code} {message}" },
   "pf.tt_unaudited": {
-    en: "{base} — until the app passes TikTok's audit only SELF_ONLY posts are allowed (TIKTOK_UNAUDITED=true)",
-    tr: "{base} — uygulama TikTok denetiminden geçene kadar sadece SELF_ONLY paylaşılabilir (TIKTOK_UNAUDITED=true)",
+    en: "{base} — until your TikTok app passes the audit, the posting TikTok account itself must be set to private (TikTok app → Settings and privacy → Privacy → Private account). Posts are sent as SELF_ONLY.",
+    tr: "{base} — TikTok uygulaman denetimden geçene kadar paylaşım yapan TikTok hesabının kendisi gizli olmalı (TikTok uygulaması → Ayarlar ve gizlilik → Gizlilik → Gizli hesap). Gönderiler SELF_ONLY olarak gönderilir.",
   },
   "pf.tt_privacy": { en: "TikTok does not allow privacy level {privacy} (allowed: {allowed})", tr: "TikTok bu gizlilik seçeneğine izin vermiyor: {privacy} (izinli: {allowed})" },
   "pf.tt_too_big": { en: "Videos larger than 64 MB are not supported for TikTok", tr: "TikTok için 64 MB'tan büyük videolar desteklenmiyor" },
