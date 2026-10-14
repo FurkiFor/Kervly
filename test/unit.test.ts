@@ -9,7 +9,7 @@ const HOSTS = "raw.githubusercontent.com";
 const PREFIX = "https://raw.githubusercontent.com/example/videos/main/clips/";
 const PREFIXES = [PREFIX];
 const env = { MEDIA_ALLOWED_HOSTS: HOSTS };
-const brand = { media_prefixes: PREFIXES };
+const brand = { allowed_prefixes: PREFIXES };
 
 describe("crypto", () => {
   it("hashes and verifies passwords", async () => {
@@ -109,4 +109,49 @@ describe("post validation", () => {
   it("rejects invalid enum values", () => expect(() => validateNewPost({ ...base, options: { privacy: "x" } }, brand, env)).toThrow());
   it("rejects unknown platforms", () => expect(() => validateNewPost({ ...base, platform: "facebook" }, brand, env)).toThrow());
   it("limits YouTube titles to 100 chars", () => expect(() => validateNewPost({ ...base, title: "a".repeat(101) }, brand, env)).toThrow());
+});
+
+import { base64Stream, parseStorageInput, signedMediaUrl, verifyMediaSig } from "../src/storage";
+import { normalizeEmail } from "../src/users";
+
+describe("storage", () => {
+  it("streams base64 identically to a one-shot encode, for any chunking", async () => {
+    for (const size of [0, 1, 2, 3, 100, 65537, 300001]) {
+      const data = crypto.getRandomValues(new Uint8Array(size > 65536 ? 65536 : size));
+      const big = new Uint8Array(size);
+      for (let i = 0; i < size; i += data.length || 1) big.set(data.subarray(0, Math.min(data.length, size - i)), i);
+      let pos = 0;
+      const src = new ReadableStream<Uint8Array>({
+        pull(c) {
+          if (pos >= size) return c.close();
+          const n = 1 + Math.floor(Math.random() * 7000);
+          c.enqueue(big.slice(pos, pos + n));
+          pos += n;
+        },
+      });
+      const out = await new Response(src.pipeThrough(base64Stream())).text();
+      expect(out).toBe(Buffer.from(big).toString("base64"));
+    }
+  });
+  it("validates storage input", () => {
+    expect(parseStorageInput({ repo: "https://github.com/me/videos.git", path: "/clips/" })).toEqual({ repo: "me/videos", branch: "main", path: "clips", token: undefined });
+    for (const bad of [{ repo: "nope" }, { repo: "a/b", path: "../x" }, { repo: "a/b", branch: "a..b" }, { repo: "a/b", token: "bad token!" }]) {
+      expect(() => parseStorageInput(bad as Record<string, unknown>)).toThrow();
+    }
+  });
+  it("signs and verifies media links", async () => {
+    const env = { ENCRYPTION_KEY: b64(crypto.getRandomValues(new Uint8Array(32))) } as never;
+    const url = new URL(await signedMediaUrl(env, "https://app.example.com", "p_abcdefgh"));
+    expect(url.pathname).toBe("/m/p_abcdefgh.mp4");
+    expect(await verifyMediaSig(env, "p_abcdefgh", url.searchParams.get("e"), url.searchParams.get("s"))).toBe(true);
+    expect(await verifyMediaSig(env, "p_other000", url.searchParams.get("e"), url.searchParams.get("s"))).toBe(false);
+    expect(await verifyMediaSig(env, "p_abcdefgh", String(Date.now() - 1), url.searchParams.get("s"))).toBe(false);
+  });
+});
+
+describe("accounts", () => {
+  it("normalizes emails", () => {
+    expect(normalizeEmail("  Me@Example.COM ")).toBe("me@example.com");
+    for (const bad of ["", "a", "a@b", "a b@c.com", "<x>@y.com"]) expect(() => normalizeEmail(bad)).toThrow();
+  });
 });

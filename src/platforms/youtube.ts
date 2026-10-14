@@ -77,7 +77,7 @@ export const youtube: PlatformAdapter = {
 
   async start(_env, post, account) {
     const opts = JSON.parse(post.options || "{}") as Record<string, unknown>;
-    const media = await openMedia(post.media_url);
+    const media = await (post.media_open ? post.media_open() : openMedia(post.media_url));
     const metadata = {
       snippet: {
         title: post.title,

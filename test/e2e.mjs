@@ -8,6 +8,7 @@ const vars = Object.fromEntries(
     .split("\n").filter(Boolean).map((l) => { const i = l.indexOf("="); return [l.slice(0, i), l.slice(i + 1).replace(/^"|"$/g, "")]; }),
 );
 const PASSWORD = process.env.TEST_PASSWORD || "test-password-1234";
+const ADMIN_EMAIL = vars.SUPERADMIN_EMAIL || "admin";
 
 let ok = 0, fail = 0;
 function check(name, cond, extra = "") {
@@ -22,7 +23,7 @@ function totp(secret, offset = 0) {
 const b64url = (b) => Buffer.from(b).toString("base64url");
 
 async function login(code) {
-  const r = await fetch(`${BASE}/login`, { method: "POST", redirect: "manual", body: new URLSearchParams({ password: PASSWORD, code, next: "/" }) });
+  const r = await fetch(`${BASE}/login`, { method: "POST", redirect: "manual", body: new URLSearchParams({ email: ADMIN_EMAIL, password: PASSWORD, code, next: "/" }) });
   return r;
 }
 
@@ -85,6 +86,16 @@ check("?lang sets cookie", r.status === 302 && (r.headers.get("set-cookie") || "
 r = await fetch(`${BASE}/api/posts`, { method: "POST", headers: H, body: JSON.stringify({ brand: "second", platforms: ["youtube"], media_url: media, title: "T", publish_at_local: localWhen }) });
 check("another brand's video rejected", r.status === 400);
 
+// 6b) Edit a scheduled post and read the overview
+{
+  const list = await (await fetch(`${BASE}/api/posts?brand=demo&status=scheduled`, { headers: { cookie } })).json();
+  const target = list.posts.find((p) => p.platform === "youtube");
+  r = await fetch(`${BASE}/api/posts/${target.id}/edit`, { method: "POST", headers: H, body: JSON.stringify({ title: "Edited title" }) });
+  check("edit scheduled post", r.status === 200 && (await r.json()).title === "Edited title");
+  const ov = await (await fetch(`${BASE}/api/overview?brand=demo`, { headers: { cookie } })).json();
+  check("overview endpoint", typeof ov.counts?.upcoming === "number" && Array.isArray(ov.checklist?.platforms));
+}
+
 // 7) MCP without a token
 r = await fetch(`${BASE}/mcp`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) });
 check("MCP without token → 401", r.status === 401);
@@ -106,7 +117,7 @@ check("authorize without session → login", r.status === 302 && (r.headers.get(
 r = await fetch(`${BASE}/authorize?${authQs}`, { headers: { cookie }, redirect: "manual" });
 const page = await r.text();
 const headers0 = r.headers;
-check("consent page", r.status === 200 && page.includes("is requesting access"), r.status + page.slice(0, 200));
+check("consent page", r.status === 200 && page.includes("wants to connect"), r.status + page.slice(0, 200));
 const consentCookie = (r.headers.get("set-cookie") || "").split(";")[0];
 const handle = /name="handle" value="([^"]+)"/.exec(page)?.[1];
 r = await fetch(`${BASE}/authorize`, { method: "POST", redirect: "manual", headers: { cookie: `${cookie}; ${consentCookie}`, "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ handle, decision: "approve", scope: "publish" }) });
@@ -126,7 +137,7 @@ let m = await call("initialize", { protocolVersion: "2025-06-18", capabilities: 
 check("MCP initialize", m.body?.result?.serverInfo?.name === "kervly");
 check("notification → 202", (await fetch(`${BASE}/mcp`, { method: "POST", headers: { Authorization: `Bearer ${tok.access_token}`, "Content-Type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) })).status === 202);
 m = await call("tools/list", {});
-check("MCP tools/list", m.body?.result?.tools?.length === 8);
+check("MCP tools/list", m.body?.result?.tools?.length === 9);
 m = await call("tools/call", { name: "list_brands", arguments: {} });
 check("MCP list_brands", m.body?.result?.structuredContent?.brands?.length === 2);
 const when2 = new Date(Date.now() + 3 * 86400_000).toISOString().replace("Z", "+00:00");
@@ -147,6 +158,59 @@ r = await fetch(`${BASE}/login?next=${encodeURIComponent("/\t/evil.com")}`);
 check("login next with control chars is sanitized", !(await r.text()).includes("evil.com"));
 r = await fetch(`${BASE}/mcp`, { method: "POST", headers: { Authorization: "Bearer sahte.token.deger", "Content-Type": "application/json" }, body: "{}" });
 check("fake token → 401", r.status === 401);
+
+// 9) Multi-user: sign-up, approval, isolation
+{
+  const userEmail = `user${Date.now()}@example.com`;
+  const userPass = "user-password-123";
+  r = await fetch(`${BASE}/signup`, { method: "POST", body: new URLSearchParams({ email: userEmail, terms: "on" }) });
+  check("sign-up accepted", r.status === 200);
+  // Without an email provider the link is logged by the dev server
+  await new Promise((res) => setTimeout(res, 500));
+  const log = readFileSync(process.env.DEVLOG, "utf8");
+  const token = [...log.matchAll(/\/verify\?token=([A-Za-z0-9_-]+)/g)].pop()?.[1];
+  check("verification link issued", Boolean(token));
+  r = await fetch(`${BASE}/verify?token=${token}`);
+  check("verification page asks for a password", r.status === 200 && (await r.text()).includes('name="password2"'));
+  r = await fetch(`${BASE}/verify`, { method: "POST", body: new URLSearchParams({ token, password: userPass, password2: userPass }) });
+  check("password set on verification", r.status === 200);
+  r = await fetch(`${BASE}/verify`, { method: "POST", body: new URLSearchParams({ token, password: "another-pass-123", password2: "another-pass-123" }) });
+  check("verification link works once", r.status === 400);
+  const tryLogin = (code = "") => fetch(`${BASE}/login`, { method: "POST", redirect: "manual", body: new URLSearchParams({ email: userEmail, password: userPass, code, next: "/" }) });
+  r = await tryLogin();
+  check("unapproved user cannot sign in", r.status === 401);
+  const users = await (await fetch(`${BASE}/api/admin/users`, { headers: { cookie } })).json();
+  const u = users.users.find((x) => x.email === userEmail);
+  check("admin sees the new user", Boolean(u));
+  r = await fetch(`${BASE}/api/admin/users/${u.id}/approve`, { method: "POST", headers: H });
+  check("admin approves", r.status === 200);
+  r = await tryLogin();
+  check("approved user signs in", r.status === 302);
+  const ucookie = (r.headers.get("set-cookie") || "").split(";")[0];
+  const ume = await (await fetch(`${BASE}/api/me`, { headers: { cookie: ucookie } })).json();
+  const UH = { cookie: ucookie, "Content-Type": "application/json", "X-CSRF-Token": ume.csrf };
+  const ub = await (await fetch(`${BASE}/api/brands`, { headers: { cookie: ucookie } })).json();
+  check("user sees no foreign brands", ub.brands.length === 0);
+  r = await fetch(`${BASE}/api/posts?brand=demo`, { headers: { cookie: ucookie } });
+  const up = await r.json();
+  check("user cannot list another brand's posts", (up.posts || []).length === 0);
+  r = await fetch(`${BASE}/api/overview?brand=demo`, { headers: { cookie: ucookie } });
+  check("user cannot open another brand", r.status === 400);
+  r = await fetch(`${BASE}/api/admin/users`, { headers: { cookie: ucookie } });
+  check("user cannot open admin API", r.status === 403);
+  const adminPosts = await (await fetch(`${BASE}/api/posts?brand=demo&status=scheduled`, { headers: { cookie } })).json();
+  r = await fetch(`${BASE}/api/posts/${adminPosts.posts[0].id}/cancel`, { method: "POST", headers: UH });
+  check("user cannot cancel another user's post", r.status === 400);
+  r = await fetch(`${BASE}/api/brands`, { method: "POST", headers: UH, body: JSON.stringify({ id: `ub${Date.now() % 100000}`, name: "User brand" }) });
+  check("user creates own brand", r.status === 200);
+  const all = await (await fetch(`${BASE}/api/brands`, { headers: { cookie } })).json();
+  check("superadmin sees every brand", all.brands.some((b) => b.owner_email === userEmail));
+  r = await fetch(`${BASE}/api/admin/users/${u.id}/disable`, { method: "POST", headers: H });
+  r = await fetch(`${BASE}/api/me`, { headers: { cookie: ucookie } });
+  check("disabled user's session ends", r.status === 401);
+  r = await fetch(`${BASE}/api/brands/demo/storage`, { method: "POST", headers: H, body: JSON.stringify({ repo: "not a repo", token: "x" }) });
+  check("storage input is validated", r.status === 400);
+}
 
 console.log(`\n${ok} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

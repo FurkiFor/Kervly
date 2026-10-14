@@ -1,4 +1,4 @@
-import { isPlatform, type Env, type Platform } from "./env";
+import { isPlatform, isSuper, type Actor, type Env, type Platform } from "./env";
 import { validateMediaUrl } from "./media";
 import { randomToken } from "./crypto";
 import { BRAND_ID_RE, getBrand, type Brand } from "./brands";
@@ -28,6 +28,10 @@ export interface PostRow {
   created_at: number;
   updated_at: number;
   tz?: string;
+  /** Set by the publisher: opens the video (storage-aware). */
+  media_open?: () => Promise<{ body: ReadableStream; size: number }>;
+  /** Set by the publisher: a URL the platform can download (signed for private storage). */
+  media_public_url?: string;
 }
 
 export interface PostView {
@@ -133,13 +137,13 @@ export function parseWhen(v: unknown): number {
 
 export function validateNewPost(
   input: NewPostInput,
-  brand: Pick<Brand, "media_prefixes">,
+  brand: Pick<Brand, "allowed_prefixes">,
   env: Pick<Env, "MEDIA_ALLOWED_HOSTS">,
   now = Date.now(),
 ) {
   if (!isPlatform(input.platform)) throw new AppError("v.platform");
   const platform = input.platform;
-  const media_url = validateMediaUrl(str(input.media_url, "media_url", 500, true), brand.media_prefixes, env.MEDIA_ALLOWED_HOSTS);
+  const media_url = validateMediaUrl(str(input.media_url, "media_url", 500, true), brand.allowed_prefixes, env.MEDIA_ALLOWED_HOSTS);
   const title = str(input.title, "title", platform === "youtube" ? 100 : 150, platform !== "instagram");
   if (platform === "youtube" && /[<>]/.test(title)) throw new AppError("v.yt_title_chars");
   const caption = str(input.caption, "caption", 2200);
@@ -178,8 +182,8 @@ export async function countPostsOnLocalDay(env: Env, brand: Brand, platform: Pla
   return results.filter((r) => localDate(r.publish_at, brand.timezone) === day).length;
 }
 
-export async function createPost(env: Env, brandId: unknown, input: NewPostInput, source: "ui" | "mcp", lang: Lang): Promise<PostView> {
-  const brand = await getBrand(env, brandId);
+export async function createPost(env: Env, actor: Actor, brandId: unknown, input: NewPostInput, source: "ui" | "mcp", lang: Lang): Promise<PostView> {
+  const brand = await getBrand(env, brandId, actor);
   const p = validateNewPost(input, brand, env);
   if ((await countPostsOnLocalDay(env, brand, p.platform, p.publish_at)) >= brand.max_posts_per_day) {
     throw new AppError("post.daily_limit", { brand: brand.name, platform: p.platform, max: brand.max_posts_per_day });
@@ -197,15 +201,22 @@ export async function createPost(env: Env, brandId: unknown, input: NewPostInput
     if (String(e).includes("UNIQUE")) throw new AppError("post.duplicate");
     throw e;
   }
-  await audit(env, source, "post.create", `${id} ${brand.id}/${p.platform} ${p.media_url} @${new Date(p.publish_at).toISOString()}`);
+  await audit(env, `${source}:${actor.email}`, "post.create", `${id} ${brand.id}/${p.platform} ${p.media_url} @${new Date(p.publish_at).toISOString()}`, { user: actor.id, brand: brand.id });
   return toView((await getPostRow(env, id))!, lang);
 }
 
-const SELECT_POST = "SELECT posts.*, brands.timezone AS tz FROM posts JOIN brands ON brands.id = posts.brand_id";
+const SELECT_POST = "SELECT posts.*, brands.timezone AS tz, brands.owner_id AS owner_id FROM posts JOIN brands ON brands.id = posts.brand_id";
 
 export async function getPostRow(env: Env, id: string): Promise<PostRow | null> {
   if (!/^p_[A-Za-z0-9_-]{6,20}$/.test(id)) return null;
   return env.DB.prepare(`${SELECT_POST} WHERE posts.id = ?`).bind(id).first<PostRow>();
+}
+
+/** A post the actor may act on (their own brand's, or any for the superadmin). */
+export async function getPostFor(env: Env, id: string, actor: Actor): Promise<PostRow> {
+  const row = await getPostRow(env, id);
+  if (!row || (!isSuper(actor) && (row as PostRow & { owner_id?: string }).owner_id !== actor.id)) throw new AppError("post.not_found");
+  return row;
 }
 
 export interface ListFilter {
@@ -219,9 +230,13 @@ export interface ListFilter {
 
 const STATUSES: PostStatus[] = ["scheduled", "publishing", "processing", "published", "error", "cancelled"];
 
-export async function listPosts(env: Env, f: ListFilter, lang: Lang): Promise<PostView[]> {
+export async function listPosts(env: Env, actor: Actor | null, f: ListFilter, lang: Lang): Promise<PostView[]> {
   const where: string[] = [];
   const args: unknown[] = [];
+  if (actor && !isSuper(actor)) {
+    where.push("brands.owner_id = ?");
+    args.push(actor.id);
+  }
   if (f.brand) {
     if (!BRAND_ID_RE.test(f.brand)) throw new AppError("b.required");
     where.push("posts.brand_id = ?");
@@ -251,18 +266,20 @@ export async function listPosts(env: Env, f: ListFilter, lang: Lang): Promise<Po
   return results.map((r) => toView(r, lang));
 }
 
-export async function cancelPost(env: Env, id: string, actor: string, lang: Lang): Promise<PostView> {
+export async function cancelPost(env: Env, actor: Actor, id: string, source: string, lang: Lang): Promise<PostView> {
+  await getPostFor(env, id, actor);
   const r = await env.DB.prepare(
     "UPDATE posts SET status = 'cancelled', updated_at = ? WHERE id = ? AND status IN ('scheduled','error') RETURNING id",
   )
     .bind(Date.now(), id)
     .first<{ id: string }>();
   if (!r) throw new AppError("post.cannot_cancel");
-  await audit(env, actor, "post.cancel", id);
+  await audit(env, `${source}:${actor.email}`, "post.cancel", id, { user: actor.id, brand: (await getPostRow(env, id))?.brand_id });
   return toView((await getPostRow(env, id))!, lang);
 }
 
-export async function retryPost(env: Env, id: string, actor: string, lang: Lang, newWhen?: number): Promise<PostView> {
+export async function retryPost(env: Env, actor: Actor, id: string, source: string, lang: Lang, newWhen?: number): Promise<PostView> {
+  await getPostFor(env, id, actor);
   const when = newWhen ?? Date.now() + 60_000;
   const r = await env.DB.prepare(
     `UPDATE posts SET status = 'scheduled', error = NULL, remote_ref = NULL, attempts = 0, publish_at = ?, locked_until = 0, updated_at = ?
@@ -271,11 +288,47 @@ export async function retryPost(env: Env, id: string, actor: string, lang: Lang,
     .bind(when, Date.now(), id)
     .first<{ id: string }>();
   if (!r) throw new AppError("post.cannot_retry");
-  await audit(env, actor, "post.retry", id);
+  await audit(env, `${source}:${actor.email}`, "post.retry", id, { user: actor.id, brand: (await getPostRow(env, id))?.brand_id });
   return toView((await getPostRow(env, id))!, lang);
 }
 
-export async function updatePost(env: Env, id: string, fields: Partial<PostRow>): Promise<void> {
+/** Edits a scheduled post (time, texts, video, options). The platform cannot change. */
+export async function editPost(env: Env, actor: Actor, id: string, input: Record<string, unknown>, source: string, lang: Lang): Promise<PostView> {
+  const row = await getPostFor(env, id, actor);
+  if (row.status !== "scheduled") throw new AppError("post.cannot_edit");
+  const brand = await getBrand(env, row.brand_id, actor);
+  const merged: NewPostInput = {
+    platform: row.platform,
+    media_url: input.media_url ?? row.media_url,
+    title: input.title ?? row.title,
+    caption: input.caption ?? row.caption,
+    tags: input.tags ?? JSON.parse(row.tags || "[]"),
+    publish_at: input.publish_at ?? new Date(row.publish_at).toISOString(),
+    options: input.options ?? JSON.parse(row.options || "{}"),
+  };
+  const p = validateNewPost(merged, brand, env);
+  if (localDate(p.publish_at, brand.timezone) !== localDate(row.publish_at, brand.timezone)) {
+    if ((await countPostsOnLocalDay(env, brand, p.platform, p.publish_at)) >= brand.max_posts_per_day) {
+      throw new AppError("post.daily_limit", { brand: brand.name, platform: p.platform, max: brand.max_posts_per_day });
+    }
+  }
+  try {
+    const r = await env.DB.prepare(
+      `UPDATE posts SET media_url = ?, title = ?, caption = ?, tags = ?, options = ?, publish_at = ?, error = NULL, updated_at = ?
+       WHERE id = ? AND status = 'scheduled' RETURNING id`,
+    )
+      .bind(p.media_url, p.title, p.caption, JSON.stringify(p.tags), JSON.stringify(p.options), p.publish_at, Date.now(), id)
+      .first<{ id: string }>();
+    if (!r) throw new AppError("post.cannot_edit");
+  } catch (e) {
+    if (String(e).includes("UNIQUE")) throw new AppError("post.duplicate");
+    throw e;
+  }
+  await audit(env, `${source}:${actor.email}`, "post.edit", `${id} @${new Date(p.publish_at).toISOString()}`, { user: actor.id, brand: row.brand_id });
+  return toView((await getPostRow(env, id))!, lang);
+}
+
+export async function patchPost(env: Env, id: string, fields: Partial<PostRow>): Promise<void> {
   const keys = Object.keys(fields).filter((k) =>
     ["status", "attempts", "remote_ref", "external_id", "result_url", "error", "locked_until"].includes(k),
   );
@@ -337,16 +390,38 @@ export async function markInterrupted(env: Env, id: string, now = Date.now()): P
   return Boolean(r);
 }
 
-export async function audit(env: Env, actor: string, action: string, detail = ""): Promise<void> {
-  await env.DB.prepare("INSERT INTO audit_log (ts, actor, action, detail) VALUES (?, ?, ?, ?)")
-    .bind(Date.now(), actor, action, detail.slice(0, 1000))
+/** `ref` ties the entry to a user and/or brand, which decides who may read it. */
+export async function audit(env: Env, actor: string, action: string, detail = "", ref: { user?: string | null; brand?: string | null } = {}): Promise<void> {
+  await env.DB.prepare("INSERT INTO audit_log (ts, actor, action, detail, user_id, brand_id) VALUES (?, ?, ?, ?, ?, ?)")
+    .bind(Date.now(), actor, action, detail.slice(0, 1000), ref.user ?? null, ref.brand ?? null)
     .run();
 }
 
-export async function recentAudit(env: Env, lang: Lang, limit = 50) {
-  const { results } = await env.DB.prepare("SELECT ts, actor, action, detail FROM audit_log ORDER BY id DESC LIMIT ?")
-    .bind(Math.min(limit, 200))
-    .all<{ ts: number; actor: string; action: string; detail: string }>();
+/** Superadmin: everything. Users: entries about themselves or their brands (exact matches only). */
+export async function recentAudit(env: Env, actor: Actor, lang: Lang, limit = 50) {
+  const lim = Math.min(limit, 200);
+  const q = isSuper(actor)
+    ? env.DB.prepare("SELECT ts, actor, action, detail FROM audit_log ORDER BY id DESC LIMIT ?").bind(lim)
+    : env.DB.prepare(
+        `SELECT ts, actor, action, detail FROM audit_log
+         WHERE user_id = ? OR brand_id IN (SELECT id FROM brands WHERE owner_id = ?)
+         ORDER BY id DESC LIMIT ?`,
+      ).bind(actor.id, actor.id, lim);
+  const { results } = await q.all<{ ts: number; actor: string; action: string; detail: string }>();
   const tz = env.DEFAULT_TIMEZONE || "UTC";
   return results.map((r) => ({ ...r, time: fmtLocal(r.ts, tz, lang) }));
+}
+
+// ---------------- App state (scheduler heartbeat) ----------------
+export async function setState(env: Env, key: string, value: string): Promise<void> {
+  await env.DB.prepare(
+    "INSERT INTO app_state (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+  )
+    .bind(key, value, Date.now())
+    .run();
+}
+
+export async function getState(env: Env, key: string): Promise<string | null> {
+  const r = await env.DB.prepare("SELECT value FROM app_state WHERE key = ?").bind(key).first<{ value: string }>();
+  return r?.value ?? null;
 }

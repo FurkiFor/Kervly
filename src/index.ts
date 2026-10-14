@@ -1,5 +1,6 @@
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
-import { ADMIN_USER, type Env } from "./env";
+import type { Env } from "./env";
+import { getUser, toActor } from "./users";
 import { app } from "./app";
 import { handleMcp } from "./mcp";
 import { runScheduled } from "./publisher";
@@ -8,9 +9,11 @@ import { APP_NAME } from "./config";
 /** /mcp requires an OAuth access token, which is only issued after the admin signs in and approves. */
 const mcpApi: ExportedHandler<Env> = {
   async fetch(request, env, ctx) {
-    const props = (ctx as unknown as { props?: { userId?: string } }).props;
-    if (props?.userId !== ADMIN_USER) return new Response("Forbidden", { status: 403 });
-    return handleMcp(request, env);
+    const props = (ctx as unknown as { props?: { userId?: string; ver?: number } }).props;
+    const user = props?.userId ? await getUser(env, props.userId) : null;
+    // Tokens stop working when the user is disabled or changes/resets their password (session_version)
+    if (!user || user.status !== "active" || user.session_version !== props?.ver) return new Response("Forbidden", { status: 403 });
+    return handleMcp(request, env, toActor(user));
   },
 };
 

@@ -1,5 +1,5 @@
-import { PLATFORMS, type Env } from "./env";
-import { cancelPost, createPost, getPostRow, listPosts, parseWhen, recentAudit, retryPost, toView, type NewPostInput } from "./db";
+import { PLATFORMS, type Actor, type Env } from "./env";
+import { cancelPost, createPost, editPost, getPostFor, listPosts, parseWhen, recentAudit, retryPost, toView, type NewPostInput } from "./db";
 import { connectionStatus } from "./connections";
 import { listBrands } from "./brands";
 import { AppError, localize, parseLang, type Lang } from "./i18n";
@@ -73,6 +73,17 @@ export const TOOLS = [
     annotations: { readOnlyHint: true },
   },
   {
+    name: "update_post",
+    title: "Update a post",
+    description: "Changes a scheduled post: publish time, video, title, caption, tags or options. Only fields you pass are changed.",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string" }, ...postProps, options: { type: "object" } },
+      required: ["id"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "cancel_post",
     title: "Cancel a post",
     description: "Cancels a post that has not been published yet (scheduled or error).",
@@ -113,10 +124,10 @@ function asId(v: unknown): string {
   return v;
 }
 
-export async function callTool(env: Env, name: string, args: Args, lang: Lang): Promise<unknown> {
+export async function callTool(env: Env, actor: Actor, name: string, args: Args, lang: Lang): Promise<unknown> {
   switch (name) {
     case "list_brands":
-      return { brands: await listBrands(env) };
+      return { brands: (await listBrands(env, actor)).map(({ storage, ...b }) => ({ ...b, storage: storage ? { repo: storage.repo, folder: storage.path, prefix: storage.prefix } : null })) };
     case "schedule_post": {
       const platforms = args.platforms;
       if (!Array.isArray(platforms) || platforms.length === 0) throw new AppError("v.platforms_required");
@@ -136,7 +147,7 @@ export async function callTool(env: Env, name: string, args: Args, lang: Lang): 
           options: allOpts[platform as string],
         };
         try {
-          created.push(await createPost(env, args.brand, input, "mcp", lang));
+          created.push(await createPost(env, actor, args.brand, input, "mcp", lang));
         } catch (e) {
           errors.push({ platform, error: localize(e, lang) });
         }
@@ -148,6 +159,7 @@ export async function callTool(env: Env, name: string, args: Args, lang: Lang): 
       return {
         posts: await listPosts(
           env,
+          actor,
           {
             brand: args.brand as string | undefined,
             status: args.status as string | undefined,
@@ -160,18 +172,20 @@ export async function callTool(env: Env, name: string, args: Args, lang: Lang): 
         ),
       };
     case "get_post": {
-      const r = await getPostRow(env, asId(args.id));
-      if (!r) throw new AppError("post.not_found");
-      return toView(r, lang);
+      return toView(await getPostFor(env, asId(args.id), actor), lang);
+    }
+    case "update_post": {
+      const { id, ...rest } = args;
+      return editPost(env, actor, asId(id), rest, "mcp", lang);
     }
     case "cancel_post":
-      return cancelPost(env, asId(args.id), "mcp", lang);
+      return cancelPost(env, actor, asId(args.id), "mcp", lang);
     case "retry_post":
-      return retryPost(env, asId(args.id), "mcp", lang, args.publish_at !== undefined ? parseWhen(args.publish_at) : undefined);
+      return retryPost(env, actor, asId(args.id), "mcp", lang, args.publish_at !== undefined ? parseWhen(args.publish_at) : undefined);
     case "connection_status":
-      return { connections: await connectionStatus(env, args.brand as string | undefined) };
+      return { connections: await connectionStatus(env, actor, args.brand as string | undefined) };
     case "recent_activity":
-      return { activity: await recentAudit(env, lang, Number(args.limit) || 30) };
+      return { activity: await recentAudit(env, actor, lang, Number(args.limit) || 30) };
     default:
       throw new RpcError(-32602, `Unknown tool: ${name}`);
   }
@@ -193,7 +207,7 @@ interface RpcRequest {
 const rpcResult = (id: RpcRequest["id"], result: unknown) => ({ jsonrpc: "2.0", id, result });
 const rpcError = (id: RpcRequest["id"], code: number, message: string) => ({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
 
-async function dispatch(env: Env, req: RpcRequest, lang: Lang) {
+async function dispatch(env: Env, actor: Actor, req: RpcRequest, lang: Lang) {
   const params = req.params ?? {};
   switch (req.method) {
     case "initialize": {
@@ -216,7 +230,7 @@ async function dispatch(env: Env, req: RpcRequest, lang: Lang) {
       const args = (params.arguments ?? {}) as Args;
       if (typeof args !== "object" || Array.isArray(args)) throw new RpcError(-32602, "arguments must be an object");
       try {
-        const out = await callTool(env, name, args, lang);
+        const out = await callTool(env, actor, name, args, lang);
         return { content: [{ type: "text", text: JSON.stringify(out, null, 2) }], structuredContent: out as Record<string, unknown>, isError: false };
       } catch (e) {
         if (e instanceof RpcError) throw e;
@@ -228,7 +242,7 @@ async function dispatch(env: Env, req: RpcRequest, lang: Lang) {
   }
 }
 
-export async function handleMcp(request: Request, env: Env): Promise<Response> {
+export async function handleMcp(request: Request, env: Env, actor: Actor): Promise<Response> {
   if (request.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
   const lang = parseLang(env.MCP_LANG) ?? "en";
   if (Number(request.headers.get("Content-Length") || 0) > 256 * 1024) return Response.json(rpcError(null, -32600, "Request too large"), { status: 413 });
@@ -244,7 +258,7 @@ export async function handleMcp(request: Request, env: Env): Promise<Response> {
   // Notifications and responses: accept without a body
   if (req.id === undefined) return new Response(null, { status: 202 });
   try {
-    return Response.json(rpcResult(req.id, await dispatch(env, req, lang)));
+    return Response.json(rpcResult(req.id, await dispatch(env, actor, req, lang)));
   } catch (e) {
     if (e instanceof RpcError) return Response.json(rpcError(req.id, e.code, e.message));
     console.error("mcp error", e);

@@ -82,7 +82,7 @@ export const instagram: PlatformAdapter = {
       headers: { Authorization: `Bearer ${account.tokens.access_token}` },
       body: form({
         media_type: "REELS",
-        video_url: post.media_url,
+        video_url: post.media_public_url ?? post.media_url,
         caption: post.caption || post.title,
         share_to_feed: String(opts.shareToFeed ?? true),
       }),

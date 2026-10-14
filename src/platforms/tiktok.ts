@@ -127,7 +127,7 @@ export const tiktok: PlatformAdapter = {
       throw new PlatformError("pf.tt_privacy", { privacy, allowed: info.privacy_level_options.join(", ") });
     }
 
-    const media = await openMedia(post.media_url);
+    const media = await (post.media_open ? post.media_open() : openMedia(post.media_url));
     if (media.size > MAX_SINGLE_CHUNK) {
       await media.body.cancel();
       throw new PlatformError("pf.tt_too_big");

@@ -1,0 +1,806 @@
+"use strict";
+// Kervly dashboard (vanilla JS, no build step). Every value placed into HTML goes through esc().
+(() => {
+  const BOOT = JSON.parse(document.getElementById("boot").textContent);
+  const T = BOOT.T;
+  const LANG = BOOT.lang;
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => "&#" + c.charCodeAt(0) + ";");
+  const tr = (k, v = {}) => String(T[k] ?? k).replace(/\{(\w+)\}/g, (_, n) => (v[n] ?? ""));
+  const PF = { youtube: "YouTube", instagram: "Instagram", tiktok: "TikTok" };
+  const PF_SHORT = { youtube: "YT", instagram: "IG", tiktok: "TT" };
+  const ICON = BOOT.icons;
+
+  const S = { csrf: "", brands: [], brand: "", view: "overview", filters: { status: "", platform: "", range: "upcoming" }, errors: 0, media: {} };
+
+  // ---------- helpers ----------
+  function toast(msg, isErr) {
+    const t = $("#toast");
+    t.textContent = msg;
+    t.classList.toggle("err", !!isErr);
+    t.classList.add("show");
+    clearTimeout(t._h);
+    t._h = setTimeout(() => t.classList.remove("show"), 4200);
+  }
+  async function api(path, opts = {}) {
+    const r = await fetch(path, {
+      ...opts,
+      headers: { "Content-Type": "application/json", "X-CSRF-Token": S.csrf, ...(opts.headers || {}) },
+      credentials: "same-origin",
+    });
+    if (r.status === 401) {
+      location.href = "/login";
+      throw new Error(T.session_over);
+    }
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || "HTTP " + r.status);
+    return j;
+  }
+  const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body || {}) });
+  const cur = () => S.brands.find((b) => b.id === S.brand);
+  const tz = () => (cur() ? cur().timezone : BOOT.defaultTz);
+  const pfBadge = (p) => '<span class="pf ' + p + '" title="' + esc(PF[p]) + '">' + PF_SHORT[p] + "</span>";
+  function statusBadge(s) {
+    const cls = { scheduled: "info", publishing: "warn", processing: "warn", published: "ok", error: "err", cancelled: "" }[s] || "";
+    return '<span class="badge ' + cls + '"><span class="dot"></span>' + esc(T["s_" + s]) + "</span>";
+  }
+  function fmtTime(iso) {
+    return new Intl.DateTimeFormat(LANG, { timeZone: tz(), hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(iso));
+  }
+  function dayKey(iso) {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: tz(), year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(iso));
+  }
+  function dayLabel(key) {
+    const today = dayKey(new Date().toISOString());
+    const tomorrow = dayKey(new Date(Date.now() + 86400000).toISOString());
+    const yesterday = dayKey(new Date(Date.now() - 86400000).toISOString());
+    if (key === today) return T.today;
+    if (key === tomorrow) return T.tomorrow;
+    if (key === yesterday) return T.yesterday;
+    const [y, m, d] = key.split("-").map(Number);
+    return new Intl.DateTimeFormat(LANG, { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" }).format(new Date(Date.UTC(y, m - 1, d, 12)));
+  }
+  function ago(iso) {
+    if (!iso) return T.never;
+    const s = Math.round((Date.now() - Date.parse(iso)) / 1000);
+    const rtf = new Intl.RelativeTimeFormat(LANG, { numeric: "auto" });
+    if (s < 60) return rtf.format(-s, "second");
+    if (s < 3600) return rtf.format(-Math.round(s / 60), "minute");
+    if (s < 86400) return rtf.format(-Math.round(s / 3600), "hour");
+    return rtf.format(-Math.round(s / 86400), "day");
+  }
+  function empty(icon, text) {
+    return '<div class="empty"><div class="em-ico">' + ICON[icon] + "</div>" + esc(text) + "</div>";
+  }
+  function copyBox(value) {
+    return '<div class="copy"><code>' + esc(value) + '</code><button class="btn ghost sm" data-copy="' + esc(value) + '">' + ICON.copy + esc(T.copy) + "</button></div>";
+  }
+
+  // ---------- dialogs ----------
+  function openDialog(id) {
+    const d = document.getElementById(id);
+    if (!d.open) d.showModal();
+    return d;
+  }
+  function confirmBox(text, okLabel, danger) {
+    return new Promise((resolve) => {
+      const d = $("#dlg-confirm");
+      $("#cf-text", d).textContent = text;
+      const ok = $("#cf-ok", d);
+      ok.textContent = okLabel || T.confirm;
+      ok.className = "btn" + (danger ? " danger" : "");
+      d.onclose = () => resolve(d.returnValue === "ok");
+      d.returnValue = "";
+      d.showModal();
+    });
+  }
+
+  // ---------- data ----------
+  async function loadBrands(select) {
+    const r = await api("/api/brands");
+    S.brands = r.brands;
+    S.hosts = r.hosts;
+    let saved = "";
+    try { saved = localStorage.getItem("brand") || ""; } catch {}
+    const has = (id) => S.brands.some((b) => b.id === id);
+    S.brand = (select && has(select) && select) || (has(S.brand) && S.brand) || (has(saved) && saved) || (S.brands[0] ? S.brands[0].id : "");
+    try { localStorage.setItem("brand", S.brand); } catch {}
+    const opts = S.brands.length
+      ? S.brands.map((b) => '<option value="' + esc(b.id) + '"' + (b.id === S.brand ? " selected" : "") + ">" + esc(b.name) + "</option>").join("")
+      : '<option value="">' + esc(T.no_brand_opt) + "</option>";
+    $$(".brand-select").forEach((s) => (s.innerHTML = opts));
+  }
+
+  // ---------- navigation ----------
+  const VIEWS = ["overview", "posts", "brands", "setup", "activity", "account", "admin"];
+  function setActive() {
+    $$("[data-nav]").forEach((a) => a.classList.toggle("on", a.dataset.nav === S.view));
+    $$(".err-count").forEach((c) => {
+      c.textContent = S.errors;
+      c.classList.toggle("hidden", !S.errors);
+    });
+  }
+  async function route() {
+    const h = location.hash.replace(/^#\/?/, "");
+    S.view = VIEWS.includes(h) ? h : "overview";
+    setActive();
+    const main = $("#view");
+    main.setAttribute("aria-busy", "true");
+    try {
+      if (!S.brands.length && !["brands", "setup", "activity", "account", "admin"].includes(S.view)) {
+        main.innerHTML = renderWelcome();
+      } else {
+        main.innerHTML = await ({ overview: viewOverview, posts: viewPosts, brands: viewBrands, setup: viewSetup, activity: viewActivity, account: viewAccount, admin: viewAdmin }[S.view])();
+      }
+    } catch (e) {
+      main.innerHTML = '<div class="card">' + empty("alert", e.message) + "</div>";
+    }
+    main.removeAttribute("aria-busy");
+    window.scrollTo(0, 0);
+  }
+
+  function head(title, sub, actions) {
+    return '<div class="page-head"><div><h1>' + esc(title) + "</h1>" + (sub ? '<div class="sub muted small">' + sub + "</div>" : "") + '</div><div class="right row">' + (actions || "") + "</div></div>";
+  }
+  const newPostBtn = () => '<button class="btn" data-act="new-post">' + ICON.plus + esc(T.new_post) + "</button>";
+
+  function renderWelcome() {
+    return head(T.welcome_title, esc(T.welcome_sub)) + '<div class="card">' + empty("brand", T.no_brands) +
+      '<div class="row center-row"><button class="btn" data-act="new-brand">' + ICON.plus + esc(T.new_brand) + "</button></div></div>";
+  }
+
+  // ---------- overview ----------
+  async function viewOverview() {
+    const o = await api("/api/overview?brand=" + encodeURIComponent(S.brand));
+    S.errors = o.counts.errors;
+    setActive();
+    const c = o.counts;
+    const stats =
+      '<div class="grid g4">' +
+      stat(T.st_today, c.today) + stat(T.st_upcoming, c.upcoming) + stat(T.st_published, c.published_7d) + stat(T.st_errors, c.errors, c.errors > 0) +
+      "</div>";
+    const sched = o.scheduler.healthy
+      ? '<span class="badge ok"><span class="dot"></span>' + esc(tr("sched_ok", { t: ago(o.scheduler.last_run) })) + "</span>"
+      : '<span class="badge warn"><span class="dot"></span>' + esc(o.scheduler.last_run ? tr("sched_late", { t: ago(o.scheduler.last_run) }) : T.sched_never) + "</span>";
+    const up = o.upcoming.length
+      ? '<div class="plist">' + o.upcoming.map((p) => postRow(p, true)).join("") + "</div>"
+      : '<div class="plist">' + empty("calendar", T.no_upcoming) + "</div>";
+    const errs = o.errors.length
+      ? '<div class="stack-sm"><h2>' + esc(T.needs_attention) + '</h2><div class="plist">' + o.errors.map((p) => postRow(p, true)).join("") + "</div></div>"
+      : "";
+    return (
+      head(tr("hello", { brand: o.brand.name }), sched, newPostBtn()) +
+      '<div class="stack">' + stats + errs +
+      '<div class="grid g2 align-start">' +
+      '<div class="stack-sm"><div class="row between"><h2>' + esc(T.next_posts) + '</h2><a href="#/posts" class="small">' + esc(T.see_all) + "</a></div>" + up + "</div>" +
+      '<div class="card"><div class="card-head"><h2>' + esc(T.checklist) + "</h2></div>" + checklist(o) + "</div>" +
+      "</div></div>"
+    );
+  }
+  function stat(label, n, err) {
+    return '<div class="card stat' + (err ? " err" : "") + '"><div class="lab">' + esc(label) + '</div><div class="num">' + esc(n) + "</div></div>";
+  }
+  function checklist(o) {
+    const k = o.checklist;
+    const items = [
+      { done: true, text: T.ck_login },
+      { done: k.allowlist, text: T.ck_allowlist, link: "#/brands" },
+      ...k.platforms.map((p) => ({
+        done: p.configured && p.connected,
+        text: tr(p.configured ? "ck_connect" : "ck_keys", { p: PF[p.platform] }),
+        link: "#/setup",
+      })),
+      { done: k.mcp_connected, text: T.ck_mcp, link: "#/setup" },
+    ];
+    return items
+      .map(
+        (i) =>
+          '<div class="check' + (i.done ? " done" : "") + '"><div class="ci">' + ICON.check + '</div><div class="ct grow">' + esc(i.text) +
+          (!i.done && i.link ? ' <a href="' + i.link + '" class="small">' + esc(T.go) + " →</a>" : "") + "</div></div>"
+      )
+      .join("");
+  }
+
+  // ---------- posts ----------
+  function postRow(p, compact) {
+    const content =
+      '<div class="ttl">' + esc(p.title || p.caption.split("\n")[0] || p.media_url.split("/").pop()) + "</div>" +
+      '<div class="meta">' + esc(p.media_url.split("/").pop()) + (compact ? " · " + esc(dayLabel(dayKey(p.publish_at))) : "") + "</div>" +
+      (p.error ? '<div class="' + (p.status === "error" ? "perr" : "pnote") + '">' + esc(p.error) + "</div>" : "");
+    const acts = [];
+    if (p.status === "scheduled") acts.push('<button class="btn ghost sm" data-act="edit" data-id="' + esc(p.id) + '" title="' + esc(T.edit) + '">' + ICON.edit + "</button>");
+    acts.push('<button class="btn ghost sm" data-act="dup" data-id="' + esc(p.id) + '" title="' + esc(T.duplicate) + '">' + ICON.copy + "</button>");
+    if (p.status === "error") acts.push('<button class="btn ghost sm" data-act="retry" data-id="' + esc(p.id) + '">' + ICON.retry + esc(T.retry) + "</button>");
+    if (p.status === "scheduled" || p.status === "error") acts.push('<button class="btn ghost sm" data-act="cancel" data-id="' + esc(p.id) + '" title="' + esc(T.cancel) + '">' + ICON.x + "</button>");
+    if (p.result_url && p.result_url.startsWith("https://")) acts.push('<a class="btn ghost sm" href="' + esc(p.result_url) + '" target="_blank" rel="noopener noreferrer">' + ICON.external + esc(T.open) + "</a>");
+    S.postCache[p.id] = p;
+    return (
+      '<div class="pitem"><div class="time">' + esc(fmtTime(p.publish_at)) + '</div><div class="pfc">' + pfBadge(p.platform) +
+      '</div><div class="content">' + content + '</div><div class="st">' + statusBadge(p.status) + '</div><div class="actions">' + acts.join("") + "</div></div>"
+    );
+  }
+  async function viewPosts() {
+    const f = S.filters;
+    const q = new URLSearchParams({ brand: S.brand, limit: "200" });
+    if (f.status) q.set("status", f.status);
+    if (f.platform) q.set("platform", f.platform);
+    const now = Date.now();
+    if (f.range === "upcoming") q.set("from", new Date(now - 3600000).toISOString());
+    if (f.range === "past") q.set("to", new Date(now).toISOString());
+    const { posts } = await api("/api/posts?" + q);
+    const list = f.range === "upcoming" ? posts.slice().sort((a, b) => a.publish_at.localeCompare(b.publish_at)) : posts;
+    const groups = [];
+    for (const p of list) {
+      const k = dayKey(p.publish_at);
+      let g = groups.find((x) => x.k === k);
+      if (!g) groups.push((g = { k, items: [] }));
+      g.items.push(p);
+    }
+    const seg = (key, val, label) => '<button class="' + (f[key] === val ? "on" : "") + '" data-filter="' + key + '" data-val="' + val + '">' + esc(label) + "</button>";
+    const filters =
+      '<div class="row mb18"><div class="seg">' + seg("range", "upcoming", T.upcoming) + seg("range", "past", T.past) + seg("range", "all", T.all) + "</div>" +
+      '<select class="select-inline" data-filter-select="status"><option value="">' + esc(T.all_statuses) + "</option>" +
+      ["scheduled", "processing", "published", "error", "cancelled"].map((s) => '<option value="' + s + '"' + (f.status === s ? " selected" : "") + ">" + esc(T["s_" + s]) + "</option>").join("") + "</select>" +
+      '<select class="select-inline" data-filter-select="platform"><option value="">' + esc(T.all_platforms) + "</option>" +
+      Object.keys(PF).map((p) => '<option value="' + p + '"' + (f.platform === p ? " selected" : "") + ">" + PF[p] + "</option>").join("") + "</select></div>";
+    const body = groups.length
+      ? groups.map((g) => '<div class="day"><div class="day-h"><h3>' + esc(dayLabel(g.k)) + '</h3><span class="tiny faint">' + g.items.length + '</span></div><div class="plist">' + g.items.map((p) => postRow(p)).join("") + "</div></div>").join("")
+      : '<div class="plist">' + empty("calendar", T.no_posts) + "</div>";
+    return head(T.posts, esc(tr("tz_note", { tz: tz() })), newPostBtn()) + filters + body;
+  }
+
+  // ---------- post dialog ----------
+  function localParts(iso) {
+    const p = Object.fromEntries(
+      new Intl.DateTimeFormat("en-CA", { timeZone: tz(), year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+        .formatToParts(new Date(iso))
+        .map((x) => [x.type, x.value])
+    );
+    return { date: p.year + "-" + p.month + "-" + p.day, time: p.hour + ":" + p.minute };
+  }
+  function openPostDialog(mode, p) {
+    const d = $("#dlg-post");
+    const f = $("#post-form");
+    f.reset();
+    f.dataset.mode = mode;
+    f.dataset.id = p && mode === "edit" ? p.id : "";
+    $("#post-title").textContent = mode === "edit" ? T.edit_post : T.new_post;
+    $("#post-tz").textContent = tz();
+    // Platforms: fixed when editing
+    $$(".ptoggle", f).forEach((l) => {
+      const inp = $("input", l);
+      inp.checked = p ? inp.value === p.platform : inp.value === "youtube";
+      inp.disabled = mode === "edit";
+      l.classList.toggle("on", inp.checked);
+      l.classList.toggle("disabled", mode === "edit" && !inp.checked);
+    });
+    const when = p && mode === "edit" ? localParts(p.publish_at) : localParts(new Date(Date.now() + 3600000).toISOString());
+    f.date.value = when.date;
+    f.time.value = mode === "edit" ? when.time : (cur().default_times[0] || when.time);
+    f.media_url.value = p ? p.media_url : "";
+    f.title.value = p ? p.title : "";
+    f.caption.value = p ? p.caption : "";
+    f.tags.value = p ? (p.tags || []).join(", ") : "";
+    const o = (p && p.options) || {};
+    f.yt_privacy.value = o.privacy && p.platform === "youtube" ? o.privacy : "public";
+    f.yt_category.value = o.category || "PEOPLE_BLOGS";
+    f.yt_kids.checked = !!o.madeForKids;
+    f.ig_feed.checked = o.shareToFeed !== false;
+    f.tt_comments.checked = !o.disableComment;
+    // Default time chips
+    $("#time-chips").innerHTML = (cur().default_times || []).map((t) => '<button type="button" class="chip" data-time="' + esc(t) + '">' + esc(t) + "</button>").join("");
+    $("#date-chips").innerHTML =
+      '<button type="button" class="chip" data-day="0">' + esc(T.today) + '</button><button type="button" class="chip" data-day="1">' + esc(T.tomorrow) + "</button>";
+    syncChips();
+    updateCounters();
+    syncPlatformSections();
+    $("#lib").classList.add("hidden");
+    const canUpload = !!(cur().storage && cur().storage.has_token);
+    $("#upload-btn").classList.toggle("hidden", !canUpload);
+    $("#upload-status").classList.toggle("hidden", canUpload);
+    $("#upload-status").textContent = canUpload ? "" : T.no_storage_upload;
+    openDialog("dlg-post");
+    if (mode !== "edit") loadLibrary();
+  }
+  function syncChips() {
+    const f = $("#post-form");
+    $$("#time-chips .chip").forEach((c) => c.classList.toggle("on", c.dataset.time === f.time.value));
+    const today = localParts(new Date().toISOString()).date;
+    const tomorrow = localParts(new Date(Date.now() + 86400000).toISOString()).date;
+    $$("#date-chips .chip").forEach((c) => c.classList.toggle("on", (c.dataset.day === "0" ? today : tomorrow) === f.date.value));
+  }
+  function updateCounters() {
+    const f = $("#post-form");
+    for (const [name, max] of [["title", 100], ["caption", 2200]]) {
+      const el = $("#cnt-" + name);
+      const n = f[name].value.length;
+      el.textContent = n + " / " + max;
+      el.classList.toggle("over", n > max);
+    }
+  }
+  function syncPlatformSections() {
+    const f = $("#post-form");
+    const on = $$('input[name="pf"]', f).filter((i) => i.checked).map((i) => i.value);
+    $$("[data-pf-section]", f).forEach((s) => s.classList.toggle("hidden", !on.includes(s.dataset.pfSection)));
+    $("#yt-title-note").classList.toggle("hidden", on.includes("youtube"));
+  }
+  async function loadLibrary() {
+    const box = $("#lib");
+    const id = S.brand;
+    try {
+      if (!S.media[id]) S.media[id] = (await api("/api/brands/" + encodeURIComponent(id) + "/media")).media;
+      const items = S.media[id];
+      if (!items.length) return;
+      box.innerHTML = items
+        .slice(0, 60)
+        .map((m) => '<button type="button" data-media="' + esc(m.url) + '"><span class="mono">' + esc(m.name) + '</span><span class="faint tiny">' + (m.size / 1048576).toFixed(1) + " MB</span></button>")
+        .join("");
+      box.classList.remove("hidden");
+      markLibrary();
+    } catch (e) {
+      box.classList.add("hidden");
+    }
+  }
+  function markLibrary() {
+    const v = $("#post-form").media_url.value;
+    $$("#lib button").forEach((b) => b.classList.toggle("on", b.dataset.media === v));
+  }
+  function uploadFile(file) {
+    const name = file.name.replace(/\.[^.]+$/, "").normalize("NFKD").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100) + ".mp4";
+    const status = $("#upload-status");
+    status.classList.remove("hidden");
+    status.innerHTML = esc(tr("uploading", { name, p: 0 })) + '<div class="progress"><i></i></div>';
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", "/api/brands/" + encodeURIComponent(S.brand) + "/upload?name=" + encodeURIComponent(name));
+      xhr.setRequestHeader("X-CSRF-Token", S.csrf);
+      xhr.setRequestHeader("Content-Type", "video/mp4");
+      xhr.upload.onprogress = (e) => {
+        if (!e.lengthComputable) return;
+        const p = Math.round((e.loaded / e.total) * 100);
+        status.firstChild.textContent = tr("uploading", { name, p });
+        $(".progress i", status).style.width = p + "%";
+      };
+      xhr.onload = () => {
+        let j = {};
+        try { j = JSON.parse(xhr.responseText); } catch {}
+        if (xhr.status === 200) resolve(j);
+        else reject(new Error(j.error || "HTTP " + xhr.status));
+      };
+      xhr.onerror = () => reject(new Error("Network error"));
+      xhr.send(file);
+    });
+  }
+  $("#upload-file").addEventListener("change", async (ev) => {
+    const file = ev.target.files[0];
+    ev.target.value = "";
+    if (!file) return;
+    try {
+      const r = await uploadFile(file);
+      $("#post-form").media_url.value = r.url;
+      $("#upload-status").textContent = tr("uploaded", { name: r.name });
+      delete S.media[S.brand];
+      loadLibrary();
+    } catch (e) {
+      $("#upload-status").textContent = e.message;
+      toast(e.message, true);
+    }
+  });
+
+  // ---------- account ----------
+  async function viewAccount() {
+    const me = await api("/api/me");
+    const u = me.user;
+    const managed = u.password_managed;
+    const pw = managed
+      ? '<div class="notice">' + esc(T.twofa_managed) + "</div>"
+      : '<form id="pw-form" class="stack-sm"><div class="grid g2"><div class="field"><label class="lbl">' + esc(T.current_password) + '</label><input name="current" type="password" autocomplete="current-password" required></div>' +
+        '<div class="field"><label class="lbl">' + esc(T.new_password) + '</label><input name="next" type="password" autocomplete="new-password" minlength="10" required></div></div><button class="btn">' + esc(T.change_password) + "</button></form>";
+    const tfa = managed
+      ? ""
+      : '<div class="card stack-sm"><div class="row"><h2>' + esc(T.twofa) + '</h2><span class="right badge ' + (u.two_factor ? "ok" : "") + '">' + esc(u.two_factor ? T.twofa_on : T.twofa_off) + "</span></div>" +
+        '<div class="small muted">' + esc(T.twofa_hint) + '</div><div id="tfa-area">' +
+        (u.two_factor
+          ? '<form id="tfa-off" class="row"><input name="password" type="password" placeholder="' + esc(T.current_password) + '" class="grow" required><button class="btn danger">' + esc(T.twofa_disable) + "</button></form>"
+          : '<button class="btn" data-act="tfa-start">' + ICON.lock + esc(T.twofa_enable) + "</button>") +
+        "</div></div>";
+    return head(T.account, esc(T.account_sub)) + '<div class="stack"><div class="card stack-sm"><div class="row"><h2>' + esc(u.email) + "</h2>" + (u.role === "superadmin" ? '<span class="badge info right">' + esc(T.superadmin) + "</span>" : "") + "</div>" + pw + "</div>" + tfa +
+      (u.role === "superadmin" ? '<a class="btn ghost" href="#/admin">' + ICON.shield + esc(T.nav_admin) + "</a>" : "") + "</div>";
+  }
+  document.addEventListener("submit", async (ev) => {
+    const f = ev.target;
+    if (f.id === "pw-form") {
+      ev.preventDefault();
+      try {
+        await post("/api/account/password", { current: f.current.value, next: f.next.value });
+        toast(T.password_changed);
+        setTimeout(() => (location.href = "/login"), 1200);
+      } catch (e) { toast(e.message, true); }
+    } else if (f.id === "tfa-confirm") {
+      ev.preventDefault();
+      try {
+        await post("/api/account/2fa/confirm", { code: f.code.value });
+        toast(T.twofa_enabled);
+        route();
+      } catch (e) { toast(e.message, true); }
+    } else if (f.id === "tfa-off") {
+      ev.preventDefault();
+      try {
+        await post("/api/account/2fa/disable", { password: f.password.value });
+        toast(T.twofa_disabled);
+        route();
+      } catch (e) { toast(e.message, true); }
+    }
+  });
+  async function startTfa() {
+    const r = await post("/api/account/2fa/start");
+    $("#tfa-area").innerHTML = '<div class="stack-sm"><div class="small">' + esc(T.twofa_scan) + "</div>" + copyBox(r.secret) + '<div class="tiny faint mono">' + esc(r.uri) + "</div>" +
+      '<form id="tfa-confirm" class="row"><input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="123456" class="grow" required><button class="btn">' + esc(T.verify) + "</button></form></div>";
+  }
+
+  // ---------- admin ----------
+  async function viewAdmin() {
+    if (BOOT.user.role !== "superadmin") return '<div class="card">' + empty("lock", T.err_forbidden || "403") + "</div>";
+    const [st, u] = await Promise.all([api("/api/admin/stats"), api("/api/admin/users")]);
+    const stats = '<div class="grid g4">' + stat(T.st_users, st.users) + stat(T.st_pending, st.pending, st.pending > 0) + stat(T.st_brands, st.brands) + stat(T.st_scheduled, st.scheduled) + "</div>";
+    const reg = '<div class="row small"><span class="muted">' + esc(T.registration) + ':</span><span class="badge info">' + esc(T["reg_" + u.registration]) + "</span>" + (u.email_configured ? "" : '<span class="badge warn">' + esc(T.email_off) + "</span>") + "</div>";
+    const statusCls = { unverified: "", pending: "warn", active: "ok", disabled: "err" };
+    const rows = u.users.map((x) => {
+      const acts = [];
+      if (x.role !== "superadmin") {
+        if (x.status === "pending") acts.push('<button class="btn sm" data-act="user" data-op="approve" data-id="' + esc(x.id) + '">' + esc(T.approve) + "</button>");
+        if (x.status !== "disabled") acts.push('<button class="btn danger sm" data-act="user" data-op="disable" data-id="' + esc(x.id) + '">' + esc(T.disable) + "</button>");
+        else acts.push('<button class="btn ghost sm" data-act="user" data-op="enable" data-id="' + esc(x.id) + '">' + esc(T.enable) + "</button>");
+      }
+      const d = (iso) => (iso ? new Date(iso).toLocaleDateString(LANG) : "–");
+      return "<tr><td><b>" + esc(x.email) + "</b>" + (x.role === "superadmin" ? ' <span class="badge info">' + esc(T.superadmin) + "</span>" : "") + (x.two_factor ? " " + ICON.lock : "") +
+        '</td><td><span class="badge ' + statusCls[x.status] + '">' + esc(T["u_" + x.status]) + "</span></td><td>" + x.brands + '</td><td class="small nowrap">' + d(x.created_at) + '</td><td class="small nowrap">' + d(x.last_login_at) + '</td><td><div class="actions">' + acts.join("") + "</div></td></tr>";
+    }).join("");
+    const users = '<div class="card tight"><div class="tablewrap"><table><thead><tr><th>' + esc(T.th_email) + "</th><th>" + esc(T.th_status) + "</th><th>" + esc(T.th_brands) + "</th><th>" + esc(T.th_joined) + "</th><th>" + esc(T.th_last) + "</th><th></th></tr></thead><tbody>" + rows + "</tbody></table></div></div>";
+    const brands = S.brands.map((b) => "<tr><td><b>" + esc(b.name) + '</b><div class="tiny faint mono">' + esc(b.id) + "</div></td><td>" + esc(b.owner_email || "–") + "</td><td>" + (b.storage ? esc(b.storage.repo) : "–") + "</td></tr>").join("");
+    return head(T.admin, esc(T.admin_sub)) + '<div class="stack">' + stats + reg + "<h2>" + esc(T.users) + "</h2>" + users +
+      "<h2>" + esc(T.all_brands) + '</h2><div class="card tight"><div class="tablewrap"><table><thead><tr><th>' + esc(T.brands) + "</th><th>" + esc(T.owner) + "</th><th>" + esc(T.storage) + "</th></tr></thead><tbody>" + brands + "</tbody></table></div></div></div>";
+  }
+
+  async function submitPost(ev) {
+    ev.preventDefault();
+    const f = $("#post-form");
+    const btn = $("#post-save");
+    btn.disabled = true;
+    const options = {
+      youtube: { privacy: f.yt_privacy.value, category: f.yt_category.value, madeForKids: f.yt_kids.checked },
+      instagram: { shareToFeed: f.ig_feed.checked },
+      tiktok: { disableComment: !f.tt_comments.checked },
+    };
+    const base = {
+      media_url: f.media_url.value.trim(),
+      title: f.title.value,
+      caption: f.caption.value,
+      tags: f.tags.value.split(",").map((s) => s.trim()).filter(Boolean),
+      publish_at_local: f.date.value + "T" + f.time.value,
+    };
+    try {
+      if (f.dataset.mode === "edit") {
+        const p = S.postCache[f.dataset.id];
+        await post("/api/posts/" + f.dataset.id + "/edit", { ...base, options: options[p.platform] });
+        toast(T.saved);
+      } else {
+        const platforms = $$('input[name="pf"]', f).filter((i) => i.checked).map((i) => i.value);
+        if (!platforms.length) throw new Error(T.pick_platform);
+        const r = await post("/api/posts", { brand: S.brand, platforms, ...base, options });
+        toast(tr("scheduled_n", { n: r.created.length }) + (r.errors.length ? " · " + r.errors.map((x) => PF[x.platform] + ": " + x.error).join("; ") : ""), r.errors.length > 0);
+      }
+      $("#dlg-post").close();
+      route();
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // ---------- brands ----------
+  async function viewBrands() {
+    const { connections } = await api("/api/connections");
+    const cards = S.brands.length
+      ? S.brands
+          .map((b) => {
+            const conns = connections.filter((c) => c.brand === b.id);
+            return (
+              '<div class="card bcard stack-sm"><div class="row between"><div><h2>' + esc(b.name) + '</h2><div class="tiny faint mono">' + esc(b.id) + "</div></div>" +
+              '<button class="btn ghost sm" data-act="edit-brand" data-id="' + esc(b.id) + '">' + ICON.edit + esc(T.edit) + "</button></div>" +
+              '<div class="row">' + conns.map((c) => pfBadge(c.platform) + (c.connected ? '<span class="badge ok">' + esc(c.account_name || T.connected) + "</span>" : '<span class="badge">' + esc(T.not_connected) + "</span>")).join(" ") + "</div>" +
+              storageBox(b) +
+              (BOOT.user.role === "superadmin" && b.owner_email && b.owner_email !== BOOT.user.email ? '<div class="tiny faint">' + esc(T.owner) + ": " + esc(b.owner_email) + "</div>" : "") +
+              '<div class="small muted">' + esc(tr("brand_line", { n: b.max_posts_per_day, tz: b.timezone })) + (b.default_times.length ? " · " + esc(b.default_times.join(", ")) : "") + "</div>" +
+              (b.media_prefixes.length ? '<div><div class="tiny faint">' + esc(T.allowlist) + "</div>" + b.media_prefixes.map((p) => '<div class="prefix mono">' + esc(p) + "</div>").join("") + "</div>" : "") +
+              (!b.allowed_prefixes.length ? '<div class="badge err">' + esc(T.allowlist_empty) + "</div>" : "") +
+              "</div>"
+            );
+          })
+          .join("")
+      : '<div class="card">' + empty("brand", T.no_brands) + "</div>";
+    return head(T.brands, esc(T.brands_hint), '<button class="btn" data-act="new-brand">' + ICON.plus + esc(T.new_brand) + "</button>") + '<div class="grid g2">' + cards + "</div>";
+  }
+  function storageBox(b) {
+    const st = b.storage;
+    return (
+      '<div class="storage-box' + (st ? " on" : "") + '">' + ICON.github +
+      '<div class="grow">' + (st
+        ? '<div class="small"><b>' + esc(st.repo) + "</b> · " + esc(st.branch) + (st.path ? " · /" + esc(st.path) : "") + '</div><div class="tiny faint">' + (st.private ? ICON.lock + " " + esc(T.storage_private) : esc(T.storage_public)) + "</div>"
+        : '<div class="small muted">' + esc(T.storage_none) + "</div>") +
+      '</div><button class="btn ghost sm" data-act="storage" data-id="' + esc(b.id) + '">' + esc(st ? T.edit : T.storage_set) + "</button></div>"
+    );
+  }
+  function openStorageDialog(b) {
+    const f = $("#storage-form");
+    f.reset();
+    f.dataset.id = b.id;
+    const st = b.storage;
+    f.repo.value = st ? st.repo : "";
+    f.branch.value = st ? st.branch : "main";
+    f.path.value = st ? st.path : "videos";
+    $("#s-token-hint").textContent = st && st.has_token ? T.s_token_keep : T.s_token_hint;
+    $("#storage-del").classList.toggle("hidden", !st);
+    openDialog("dlg-storage");
+  }
+  async function submitStorage(ev) {
+    ev.preventDefault();
+    const f = $("#storage-form");
+    const btn = $("#storage-save");
+    btn.disabled = true;
+    try {
+      const b = await post("/api/brands/" + encodeURIComponent(f.dataset.id) + "/storage", { repo: f.repo.value, branch: f.branch.value, path: f.path.value, token: f.token.value });
+      f.token.value = "";
+      toast(T.storage_saved);
+      $("#dlg-storage").close();
+      delete S.media[b.id];
+      await loadBrands(S.brand);
+      route();
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+  function openBrandDialog(b) {
+    const f = $("#brand-form");
+    f.reset();
+    f.dataset.mode = b ? "edit" : "new";
+    $("#brand-title").textContent = b ? T.edit_brand + " " + b.name : T.new_brand;
+    f.bid.value = b ? b.id : "";
+    f.bid.disabled = !!b;
+    f.bname.value = b ? b.name : "";
+    f.prefixes.value = b ? b.media_prefixes.join("\n") : "";
+    f.limit.value = b ? b.max_posts_per_day : 3;
+    f.times.value = b ? b.default_times.join(", ") : "";
+    const zones = (Intl.supportedValuesOf ? Intl.supportedValuesOf("timeZone") : [BOOT.defaultTz, "UTC"]).slice();
+    if (!zones.includes("UTC")) zones.unshift("UTC");
+    const sel = b ? b.timezone : BOOT.defaultTz;
+    f.tz.innerHTML = zones.map((z) => '<option value="' + esc(z) + '"' + (z === sel ? " selected" : "") + ">" + esc(z.replace(/_/g, " ")) + "</option>").join("");
+    $("#hosts").textContent = S.hosts;
+    $("#brand-del").classList.toggle("hidden", !b);
+    openDialog("dlg-brand");
+  }
+  async function submitBrand(ev) {
+    ev.preventDefault();
+    const f = $("#brand-form");
+    const body = {
+      name: f.bname.value,
+      media_prefixes: f.prefixes.value.split("\n").map((x) => x.trim()).filter(Boolean),
+      max_posts_per_day: Number(f.limit.value),
+      timezone: f.tz.value,
+      default_times: f.times.value,
+    };
+    try {
+      const b =
+        f.dataset.mode === "edit"
+          ? await post("/api/brands/" + encodeURIComponent(f.bid.value), body)
+          : await post("/api/brands", { id: f.bid.value.trim(), ...body });
+      toast(T.brand_saved);
+      $("#dlg-brand").close();
+      delete S.media[b.id];
+      await loadBrands(b.id);
+      route();
+    } catch (e) {
+      toast(e.message, true);
+    }
+  }
+
+  // ---------- setup ----------
+  async function viewSetup() {
+    const origin = location.origin;
+    const o = S.brand ? await api("/api/overview?brand=" + encodeURIComponent(S.brand)) : null;
+    const { connections } = S.brand ? await api("/api/connections?brand=" + encodeURIComponent(S.brand)) : { connections: [] };
+    const consoles = {
+      youtube: { url: "https://console.cloud.google.com/apis/credentials", secrets: "GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET" },
+      instagram: { url: "https://developers.facebook.com/apps/", secrets: "INSTAGRAM_APP_ID, INSTAGRAM_APP_SECRET" },
+      tiktok: { url: "https://developers.tiktok.com/apps/", secrets: "TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET" },
+    };
+    const pfCards = Object.keys(PF)
+      .map((p) => {
+        const c = connections.find((x) => x.platform === p) || { configured: false, connected: false };
+        const state = !c.configured
+          ? '<span class="badge warn">' + esc(T.keys_missing_short) + "</span>"
+          : c.connected
+            ? '<span class="badge ok">' + esc(c.account_name || T.connected) + "</span>"
+            : '<span class="badge info">' + esc(T.ready_to_connect) + "</span>";
+        const action = c.configured && S.brand
+          ? '<a class="btn ' + (c.connected ? "ghost " : "") + 'sm" href="/connect/' + p + "?brand=" + encodeURIComponent(S.brand) + '">' + esc(c.connected ? T.reconnect : T.connect) + "</a>" +
+            (c.connected ? ' <button class="btn danger sm" data-act="disconnect" data-pf="' + p + '">' + esc(T.remove) + "</button>" : "")
+          : "";
+        const extra = p === "tiktok" && o && o.tiktok_unaudited ? '<div class="small warn-text">' + esc(T.tt_unaudited) + "</div>" : "";
+        return (
+          '<div class="card stack-sm"><div class="row">' + pfBadge(p) + "<h2>" + PF[p] + "</h2>" + '<span class="right">' + state + "</span></div>" +
+          '<div class="tiny faint">' + esc(T.redirect_uri) + "</div>" + copyBox(origin + "/connect/" + p + "/callback") +
+          '<div class="small muted">' + esc(T.secrets_needed) + ' <span class="mono">' + esc(consoles[p].secrets) + "</span></div>" + extra +
+          '<div class="row"><a class="btn ghost sm" href="' + consoles[p].url + '" target="_blank" rel="noopener noreferrer">' + ICON.external + esc(T.open_console) + "</a>" + action + "</div></div>"
+        );
+      })
+      .join("");
+    const sched = o
+      ? o.scheduler.healthy
+        ? '<span class="badge ok"><span class="dot"></span>' + esc(tr("sched_ok", { t: ago(o.scheduler.last_run) })) + "</span>"
+        : '<span class="badge warn"><span class="dot"></span>' + esc(o.scheduler.last_run ? tr("sched_late", { t: ago(o.scheduler.last_run) }) : T.sched_never) + "</span>"
+      : "";
+    return (
+      head(T.setup, esc(T.setup_sub)) +
+      '<div class="stack">' +
+      '<div class="card stack-sm"><div class="row"><h2>' + esc(T.mcp_title) + '</h2><span class="right">' + (o && o.checklist.mcp_connected ? '<span class="badge ok">' + esc(T.connected) + "</span>" : "") + "</span></div>" +
+      '<div class="small muted">' + esc(T.mcp_sub) + "</div>" + copyBox(origin + "/mcp") +
+      '<ol class="steps small"><li>' + esc(T.mcp_s1) + "</li><li>" + esc(T.mcp_s2) + "</li><li>" + esc(T.mcp_s3) + "</li></ol></div>" +
+      '<div class="grid g3">' + pfCards + "</div>" +
+      '<div class="card stack-sm"><h2>' + esc(T.legal_urls) + '</h2><div class="small muted">' + esc(T.legal_sub) + "</div>" +
+      '<div class="kv"><div class="small">' + esc(T.privacy) + "</div>" + copyBox(origin + "/privacy") + '<div class="small">' + esc(T.terms) + "</div>" + copyBox(origin + "/terms") +
+      '<div class="small">' + esc(T.website) + "</div>" + copyBox(origin) + "</div></div>" +
+      '<div class="card stack-sm"><div class="row"><h2>' + esc(T.scheduler) + '</h2><span class="right">' + sched + "</span></div>" +
+      '<div class="small muted">' + esc(T.scheduler_sub) + "</div></div>" +
+      '<div class="small muted">' + esc(T.docs_hint) + ' <a href="' + esc(BOOT.repoUrl) + '/blob/main/docs/' + (LANG === "tr" ? "SELF_HOSTING.tr.md" : "SELF_HOSTING.md") + '" target="_blank" rel="noopener noreferrer">' + esc(T.docs_link) + "</a></div>" +
+      "</div>"
+    );
+  }
+
+  // ---------- activity ----------
+  async function viewActivity() {
+    const { activity } = await api("/api/activity");
+    const rows = activity
+      .map((a) => "<tr><td class=\"nowrap small\">" + esc(a.time) + '</td><td><span class="badge">' + esc(a.actor) + '</span></td><td class="small nowrap">' + esc(a.action) + '</td><td class="mono">' + esc(a.detail) + "</td></tr>")
+      .join("");
+    return head(T.activity, esc(T.activity_sub)) + '<div class="card tight"><div class="tablewrap"><table><thead><tr><th>' + esc(T.th_time) + "</th><th>" + esc(T.th_actor) + "</th><th>" + esc(T.th_action) + "</th><th>" + esc(T.th_detail) + "</th></tr></thead><tbody>" + (rows || "") + "</tbody></table>" + (rows ? "" : empty("activity", T.no_activity)) + "</div></div>";
+  }
+
+  // ---------- events ----------
+  document.addEventListener("click", async (ev) => {
+    const el = ev.target.closest("[data-act],[data-copy],[data-filter],[data-time],[data-day],[data-media],[data-close]");
+    if (!el) return;
+    try {
+      if (el.dataset.copy) {
+        await navigator.clipboard.writeText(el.dataset.copy);
+        toast(T.copied);
+        return;
+      }
+      if (el.dataset.close) return el.closest("dialog").close();
+      if (el.dataset.filter) {
+        S.filters[el.dataset.filter] = el.dataset.val;
+        return route();
+      }
+      if (el.dataset.time) {
+        $("#post-form").time.value = el.dataset.time;
+        return syncChips();
+      }
+      if (el.dataset.day) {
+        $("#post-form").date.value = localParts(new Date(Date.now() + Number(el.dataset.day) * 86400000).toISOString()).date;
+        return syncChips();
+      }
+      if (el.dataset.media) {
+        $("#post-form").media_url.value = el.dataset.media;
+        return markLibrary();
+      }
+      const id = el.dataset.id;
+      switch (el.dataset.act) {
+        case "new-post":
+          return openPostDialog("new", null);
+        case "edit":
+          return openPostDialog("edit", S.postCache[id]);
+        case "dup":
+          return openPostDialog("dup", S.postCache[id]);
+        case "cancel":
+          if (!(await confirmBox(T.confirm_cancel, T.cancel_post, true))) return;
+          await post("/api/posts/" + id + "/cancel");
+          toast(T.cancelled);
+          return route();
+        case "retry":
+          await post("/api/posts/" + id + "/retry");
+          toast(T.requeued);
+          return route();
+        case "new-brand":
+          return openBrandDialog(null);
+        case "storage":
+          return openStorageDialog(S.brands.find((b) => b.id === id));
+        case "tfa-start":
+          return startTfa();
+        case "user":
+          await post("/api/admin/users/" + id + "/" + el.dataset.op);
+          toast(T.done);
+          return route();
+        case "edit-brand":
+          return openBrandDialog(S.brands.find((b) => b.id === id));
+        case "disconnect":
+          if (!(await confirmBox(tr("confirm_disconnect", { x: cur().name + " / " + PF[el.dataset.pf] }), T.remove, true))) return;
+          await post("/api/connections/" + encodeURIComponent(S.brand) + "/" + el.dataset.pf + "/delete");
+          toast(T.removed);
+          return route();
+        case "logout":
+          await fetch("/logout", { method: "POST", headers: { "X-CSRF-Token": S.csrf } });
+          location.href = "/login";
+          return;
+      }
+    } catch (e) {
+      toast(e.message, true);
+    }
+  });
+  document.addEventListener("change", (ev) => {
+    const t = ev.target;
+    if (t.matches("[data-filter-select]")) {
+      S.filters[t.dataset.filterSelect] = t.value;
+      route();
+    } else if (t.matches(".brand-select")) {
+      S.brand = t.value;
+      try { localStorage.setItem("brand", S.brand); } catch {}
+      $$(".brand-select").forEach((s) => (s.value = S.brand));
+      route();
+    } else if (t.matches('input[name="pf"]')) {
+      t.closest(".ptoggle").classList.toggle("on", t.checked);
+      syncPlatformSections();
+    } else if (t.form && t.form.id === "post-form" && (t.name === "date" || t.name === "time")) {
+      syncChips();
+    }
+  });
+  document.addEventListener("input", (ev) => {
+    if (ev.target.form && ev.target.form.id === "post-form") {
+      updateCounters();
+      if (ev.target.name === "media_url") markLibrary();
+    }
+  });
+  $("#post-form").addEventListener("submit", submitPost);
+  $("#brand-form").addEventListener("submit", submitBrand);
+  $("#storage-form").addEventListener("submit", submitStorage);
+  $("#storage-del").addEventListener("click", async () => {
+    const id = $("#storage-form").dataset.id;
+    if (!(await confirmBox(T.remove + "?", T.remove, true))) return;
+    try {
+      await post("/api/brands/" + encodeURIComponent(id) + "/storage/delete");
+      $("#dlg-storage").close();
+      await loadBrands(S.brand);
+      route();
+    } catch (e) { toast(e.message, true); }
+  });
+  $("#brand-del").addEventListener("click", async () => {
+    const id = $("#brand-form").bid.value;
+    if (!(await confirmBox(tr("confirm_delete_brand", { x: id }), T.delete_brand, true))) return;
+    try {
+      await post("/api/brands/" + encodeURIComponent(id) + "/delete");
+      toast(T.brand_deleted);
+      $("#dlg-brand").close();
+      await loadBrands();
+      route();
+    } catch (e) {
+      toast(e.message, true);
+    }
+  });
+  window.addEventListener("hashchange", route);
+
+  // ---------- start ----------
+  (async () => {
+    S.postCache = {};
+    const me = await api("/api/me");
+    S.csrf = me.csrf;
+    const p = new URLSearchParams(location.search);
+    await loadBrands(p.get("brand") || undefined);
+    if (p.get("connected")) toast(tr("connected_x", { x: PF[p.get("connected")] || "" }));
+    if (p.get("error")) toast(p.get("error"), true);
+    if (p.has("connected") || p.has("error") || p.has("brand")) history.replaceState(null, "", "/" + location.hash);
+    await route();
+  })().catch((e) => toast(e.message, true));
+})();

@@ -1,7 +1,9 @@
 import type { Env } from "./env";
-import { audit, dueCandidates, lockForPoll, lockForPublish, markInterrupted, updatePost, type PostRow } from "./db";
+import { audit, dueCandidates, getPostRow, lockForPoll, lockForPublish, markInterrupted, patchPost, setState, type PostRow } from "./db";
 import { ADAPTERS, getAccount, refreshAllConnections } from "./connections";
-import { probeMedia } from "./media";
+import { openMedia, probeMedia } from "./media";
+import { getBrandRow } from "./brands";
+import { openStoredMedia, signedMediaUrl, storagePathOf } from "./storage";
 import { AppError, localize, storeMsg } from "./i18n";
 import { PlatformError, type StepResult } from "./platforms/types";
 
@@ -18,10 +20,10 @@ const logText = (e: unknown) => localize(e, "en").slice(0, 400);
 async function applyResult(env: Env, post: PostRow, res: StepResult, keepLockUntil = 0): Promise<void> {
   const note = res.note ? JSON.stringify({ k: res.note }) : null;
   if (res.state === "published") {
-    await updatePost(env, post.id, { status: "published", external_id: res.external_id, result_url: res.result_url, error: note, locked_until: 0 });
-    await audit(env, "system", "post.published", `${post.id} ${post.brand_id}/${post.platform} ${res.external_id}`);
+    await patchPost(env, post.id, { status: "published", external_id: res.external_id, result_url: res.result_url, error: note, locked_until: 0 });
+    await audit(env, "system", "post.published", `${post.id} ${post.brand_id}/${post.platform} ${res.external_id}`, { brand: post.brand_id });
   } else {
-    await updatePost(env, post.id, { status: "processing", remote_ref: res.remote_ref, error: note, locked_until: keepLockUntil });
+    await patchPost(env, post.id, { status: "processing", remote_ref: res.remote_ref, error: note, locked_until: keepLockUntil });
   }
 }
 
@@ -30,19 +32,29 @@ async function publish(env: Env, post: PostRow): Promise<void> {
   let res: StepResult;
   try {
     const account = await getAccount(env, post.brand_id, post.platform);
-    await probeMedia(post.media_url);
+    const brand = await getBrandRow(env, post.brand_id);
+    if (brand.storage_token_enc && storagePathOf(brand, post.media_url)) {
+      // Video lives in the brand's GitHub storage: read it with the brand's token
+      post.media_open = async () => (await openStoredMedia(env, brand, post.media_url)) ?? openMedia(post.media_url);
+      if (brand.storage_private) {
+        if (!env.PUBLIC_URL) throw new AppError("s.public_url");
+        post.media_public_url = await signedMediaUrl(env, env.PUBLIC_URL, post.id);
+      }
+    } else {
+      await probeMedia(post.media_url);
+    }
     res = await ADAPTERS[post.platform].start(env, post, account);
   } catch (e) {
     if (isRetryable(e) && post.attempts < MAX_ATTEMPTS) {
-      await updatePost(env, post.id, {
+      await patchPost(env, post.id, {
         status: "scheduled",
         error: storeMsg(new AppError("post.retry_later", { reason: e instanceof AppError ? e : String(e) })),
         locked_until: Date.now() + 5 * 60_000,
       });
-      await audit(env, "system", "post.retry_later", `${post.id} ${logText(e)}`);
+      await audit(env, "system", "post.retry_later", `${post.id} ${logText(e)}`, { brand: post.brand_id });
     } else {
-      await updatePost(env, post.id, { status: "error", error: storeMsg(e), locked_until: 0 });
-      await audit(env, "system", "post.error", `${post.id} ${post.brand_id}/${post.platform} ${logText(e)}`);
+      await patchPost(env, post.id, { status: "error", error: storeMsg(e), locked_until: 0 });
+      await audit(env, "system", "post.error", `${post.id} ${post.brand_id}/${post.platform} ${logText(e)}`, { brand: post.brand_id });
     }
     return;
   }
@@ -65,22 +77,23 @@ async function poll(env: Env, post: PostRow): Promise<void> {
     await applyResult(env, post, res);
   } catch (e) {
     if (isRetryable(e)) {
-      await updatePost(env, post.id, { error: storeMsg(new AppError("post.poll_retry", { reason: e instanceof AppError ? e : String(e) })), locked_until: 0 });
+      await patchPost(env, post.id, { error: storeMsg(new AppError("post.poll_retry", { reason: e instanceof AppError ? e : String(e) })), locked_until: 0 });
     } else {
-      await updatePost(env, post.id, { status: "error", error: storeMsg(e), locked_until: 0 });
-      await audit(env, "system", "post.error", `${post.id} ${post.brand_id}/${post.platform} ${logText(e)}`);
+      await patchPost(env, post.id, { status: "error", error: storeMsg(e), locked_until: 0 });
+      await audit(env, "system", "post.error", `${post.id} ${post.brand_id}/${post.platform} ${logText(e)}`, { brand: post.brand_id });
     }
   }
 }
 
 export async function runScheduled(env: Env): Promise<void> {
   const started = Date.now();
+  await setState(env, "cron.last_run", String(started));
   for (const c of await dueCandidates(env, started)) {
     // Don't start new uploads late in the run (a cron run may last at most 15 minutes)
     if (Date.now() - started > 10 * 60_000) break;
     const now = Date.now();
     if (c.status === "publishing") {
-      if (await markInterrupted(env, c.id, now)) await audit(env, "system", "post.interrupted", c.id);
+      if (await markInterrupted(env, c.id, now)) await audit(env, "system", "post.interrupted", c.id, { brand: (await getPostRow(env, c.id))?.brand_id });
       continue;
     }
     if (c.status === "processing") {

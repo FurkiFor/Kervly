@@ -15,6 +15,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Explains, instead of silently skipping, why nothing was deployed.
+  not-configured:
+    if: ${{ vars.D1_DATABASE_ID == '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "::warning title=Deploy skipped::Repository variable D1_DATABASE_ID is not set. Add D1_DATABASE_ID, KV_OAUTH_ID and KV_SESSIONS_ID under Settings → Secrets and variables → Actions → Variables (not Secrets, not an Environment). See docs/SELF_HOSTING.md."
+
   deploy:
     if: ${{ vars.D1_DATABASE_ID != '' }}
     runs-on: ubuntu-latest
@@ -43,6 +51,12 @@ jobs:
           MEDIA_ALLOWED_HOSTS: ${{ vars.MEDIA_ALLOWED_HOSTS }}
           MAX_POSTS_PER_DAY_CEILING: ${{ vars.MAX_POSTS_PER_DAY_CEILING }}
           TIKTOK_UNAUDITED: ${{ vars.TIKTOK_UNAUDITED }}
+          PUBLIC_URL: ${{ vars.PUBLIC_URL }}
+          SUPERADMIN_EMAIL: ${{ vars.SUPERADMIN_EMAIL }}
+          REGISTRATION: ${{ vars.REGISTRATION }}
+          MAX_BRANDS_PER_USER: ${{ vars.MAX_BRANDS_PER_USER }}
+          EMAIL_FROM: ${{ vars.EMAIL_FROM }}
+          EMAIL_BINDING: ${{ vars.EMAIL_BINDING }}
       - name: Database migrations
         run: npx wrangler d1 migrations apply DB --remote -c wrangler.deploy.json
         env:

@@ -4,3 +4,10 @@ ADMIN_PASSWORD_HASH=""
 ADMIN_TOTP_SECRET=""
 ENCRYPTION_KEY=""
 CONSENT_SECRET=""
+# Multi-user (optional). Superadmin signs in with this email + ADMIN_PASSWORD_HASH password + TOTP.
+SUPERADMIN_EMAIL="owner@example.com"
+REGISTRATION="closed"   # closed | approval | open
+PUBLIC_URL="http://localhost:8787"
+# Email: leave empty locally — verification links are printed to the dev server log.
+EMAIL_FROM=""
+RESEND_API_KEY=""

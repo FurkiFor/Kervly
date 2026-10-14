@@ -54,7 +54,11 @@ if (env.CUSTOM_DOMAIN) {
   const d = env.CUSTOM_DOMAIN.trim().toLowerCase();
   if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(d)) throw new Error("CUSTOM_DOMAIN is invalid");
   cfg.routes = [{ pattern: d, custom_domain: true }];
+  if (!env.PUBLIC_URL) cfg.vars.PUBLIC_URL = `https://${d}`;
 }
+
+// Optional Cloudflare Email Service binding (Workers Paid plan)
+if (env.EMAIL_BINDING === "true") cfg.send_email = [{ name: "EMAIL" }];
 
 // Optional overrides for non-secret settings
 for (const k of Object.keys(cfg.vars)) {

@@ -7,6 +7,8 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "kervly",
   "main": "src/index.ts",
+  // Browser code and styles are bundled as text (src/client/*.txt)
+  "rules": [{ "type": "Text", "globs": ["**/*.txt"], "fallthrough": true }],
   "compatibility_date": "2026-09-01",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
@@ -31,6 +33,15 @@
     "MCP_LANG": "en",
     "INSTAGRAM_API_VERSION": "v23.0",
     // Set to "false" once your TikTok app has passed the Content Posting API audit
-    "TIKTOK_UNAUDITED": "true"
+    "TIKTOK_UNAUDITED": "true",
+    // Public URL of this instance (emails, signed media links). Set automatically from CUSTOM_DOMAIN.
+    "PUBLIC_URL": "",
+    // Superadmin sign-in name (an email). Signs in with ADMIN_PASSWORD_HASH + ADMIN_TOTP_SECRET. Empty = "admin".
+    "SUPERADMIN_EMAIL": "",
+    // "closed" (only the superadmin), "approval" (sign-ups wait for approval) or "open"
+    "REGISTRATION": "closed",
+    "MAX_BRANDS_PER_USER": "3",
+    // Sender for account emails, e.g. "Kervly <noreply@example.com>" (needs RESEND_API_KEY or the EMAIL binding)
+    "EMAIL_FROM": ""
   }
 }

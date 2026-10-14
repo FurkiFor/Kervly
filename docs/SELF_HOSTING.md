@@ -43,6 +43,12 @@ Fork or clone this repository into your own GitHub account, then open *Settings 
 | `DEFAULT_LANG` / `MCP_LANG` | no | `en` or `tr` |
 | `MEDIA_ALLOWED_HOSTS` | no | `raw.githubusercontent.com` |
 | `TIKTOK_UNAUDITED` | no | `true` until your TikTok app passes the audit |
+| `SUPERADMIN_EMAIL` | recommended | `you@example.com` — the superadmin account. Without it the superadmin signs in as `admin`. |
+| `REGISTRATION` | no | `closed` (default), `approval` (waitlist, superadmin approves) or `open` |
+| `MAX_BRANDS_PER_USER` | no | `3` (the superadmin has no limit) |
+| `EMAIL_FROM` | for sign-up | `Kervly <noreply@example.com>` |
+| `EMAIL_BINDING` | no | `true` to use the Cloudflare Email Service binding instead of Resend (needs Workers Paid) |
+| `PUBLIC_URL` | no | Set automatically from `CUSTOM_DOMAIN`. Needed for email links and private-repo storage. |
 
 These are not secrets, but keeping them out of the repository means your fork carries no personal ids.
 
@@ -51,26 +57,52 @@ These are not secrets, but keeping them out of the repository means your fork ca
 *Actions → Deploy → Run workflow*. Every later push to `main` redeploys automatically and applies database migrations.
 The workflow does nothing until `D1_DATABASE_ID` is set.
 
-## 4. Admin account (password + 2FA)
+## 4. Superadmin account (password + 2FA)
+
+The superadmin is the owner of the instance. They see every user and brand, approve sign-ups and manage their own brands.
 
 1. Open `<URL>`. You are redirected to `/setup`.
 2. Choose a password of at least 12 characters and click **Generate values**. The values are generated in your browser only.
 3. Add the four values as **Secrets** in Cloudflare: *Workers & Pages → your worker → Settings → Variables and Secrets*.
    They are `ADMIN_PASSWORD_HASH`, `ADMIN_TOTP_SECRET`, `ENCRYPTION_KEY` and `CONSENT_SECRET`.
 4. Add `ADMIN_TOTP_SECRET` to your authenticator app.
-5. Sign in at `<URL>` with your password and the 6-digit code.
+5. Sign in at `<URL>` with `SUPERADMIN_EMAIL`, your password and the 6-digit code.
+
+## 5. Users and email (optional)
+
+With `REGISTRATION=approval` or `open`, people can create an account with their email at `<URL>/signup`. They confirm the
+address through an emailed link and choose their password there. In `approval` mode the account then waits until the
+superadmin approves it in *Admin*. Users can enable 2FA under *Account*.
+
+Sending email needs `EMAIL_FROM` and one provider:
+
+- **Resend** (free tier): verify your domain at [resend.com](https://resend.com), then add the Cloudflare secret `RESEND_API_KEY`.
+- **Cloudflare Email Service**: set the variable `EMAIL_BINDING=true` (requires Workers Paid and an onboarded sending domain).
+
+Without a provider, links are only written to the worker log, so keep `REGISTRATION=closed`.
 
 > If `ENCRYPTION_KEY` changes, stored platform connections can no longer be decrypted and must be reconnected.
 
-## 5. Brands
+## 6. Brands and GitHub storage
 
-In the dashboard, open *Brands → New brand*. Set an id, a name and the **video allowlist**: the folder(s) your videos are
-served from, for example `https://raw.githubusercontent.com/you/videos/main/clips/`. Then set a daily limit and a time zone.
-Kervly will only ever publish `.mp4` files under these prefixes.
+In the dashboard, open *Brands → New brand*. Set an id, a name, a daily limit and a time zone. Then click
+**Configure storage** on the brand card:
+
+1. Create a repository for the brand's videos (private is fine).
+2. GitHub → *Settings → Developer settings → Fine-grained tokens → Generate new token*. *Repository access*: only that
+   repository. *Permissions → Contents*: **Read and write**. Pick an expiry you're comfortable with.
+3. Enter the repository (`owner/name`), branch, folder and token, then click **Verify & save**. Kervly checks that the
+   token can push and stores it encrypted.
+
+You can now upload videos from the post dialog (up to 50 MB each) or pick videos already in the folder. Videos in private
+repositories are handed to Instagram and TikTok through 30-minute signed links, so `PUBLIC_URL` must be set.
+
+Alternatively, add **public video prefixes** (e.g. `https://raw.githubusercontent.com/you/videos/main/clips/`) in the brand
+settings. Kervly only ever publishes `.mp4` files from the brand's storage folder or these prefixes.
 
 You create **one app per platform** (below). Every brand then connects its own accounts with **Connect** in the dashboard.
 
-## 6. YouTube
+## 7. YouTube
 
 1. [Google Cloud Console](https://console.cloud.google.com/): create a project and enable **YouTube Data API v3**.
 2. *Google Auth Platform*: set the audience to *External*, add the scope `.../auth/youtube.upload`, and add yourself as a test user.
@@ -81,7 +113,7 @@ You create **one app per platform** (below). Every brand then connects its own a
 6. Google may keep uploads from unverified API projects **private**. If your first video stays private, submit the
    *YouTube API Services – Audit and Quota Extension Form* (free).
 
-## 7. Instagram (Reels)
+## 8. Instagram (Reels)
 
 Requirement: a **professional** Instagram account (Business or Creator).
 
@@ -96,7 +128,7 @@ Requirement: a **professional** Instagram account (Business or Creator).
 4. In *Development* mode, publishing works for accounts that have a role on the app. That's enough for your own brands.
 5. Dashboard → select brand → Instagram → **Connect**. To connect another brand's account, sign in to Instagram with it first.
 
-## 8. TikTok
+## 9. TikTok
 
 1. [TikTok for Developers](https://developers.tiktok.com/): *Manage apps → Connect an app*.
 2. App details: Terms URL `<URL>/terms`, Privacy URL `<URL>/privacy`, platform *Web*, website `<URL>`.
@@ -107,14 +139,16 @@ Requirement: a **professional** Instagram account (Business or Creator).
 7. **Audit:** until the Content Posting API audit is approved, TikTok only allows private (`SELF_ONLY`) posts. Kervly enforces this
    while `TIKTOK_UNAUDITED=true`. Set the variable to `false` after approval.
 
-## 9. Connect your AI agent (MCP)
+## 10. Connect your AI agent (MCP)
 
-In Claude: *Settings → Connectors → Add custom connector*, URL `<URL>/mcp`. Click **Connect**, sign in (password + 2FA) and
-click **Allow**. Other MCP clients that support OAuth work the same way.
+In Claude: *Settings → Connectors → Add custom connector*, URL `<URL>/mcp`. Click **Connect**, sign in and
+click **Allow**. Each user connects with their own account and only sees their own brands. Other MCP clients that support OAuth work the same way.
 
 Example prompt: *"List my Kervly brands, then schedule https://…/clip.mp4 for YouTube and TikTok tomorrow at 10:00 Istanbul time."*
 
 ## Troubleshooting
+- **Storage: "token is invalid" / "cannot write"**: the token expired or lacks *Contents: Read and write* on that repository.
+- **No verification email**: check `EMAIL_FROM`, the provider secret and the worker log.
 - **"App keys are not configured"**: the platform's client id or secret is missing.
 - **YouTube "token refresh failed"**: the Google app is still in *Testing*. Publish it and reconnect.
 - **"Upload was interrupted"**: check whether the video appeared on the platform. If it didn't, click **Retry**.

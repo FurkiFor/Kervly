@@ -42,6 +42,12 @@ Repoyu kendi hesabınıza fork'layın ya da kopyalayın. Sonra *Settings → Sec
 | `DEFAULT_LANG` / `MCP_LANG` | hayır | `tr` ya da `en` |
 | `MEDIA_ALLOWED_HOSTS` | hayır | `raw.githubusercontent.com` |
 | `TIKTOK_UNAUDITED` | hayır | TikTok denetimi bitene kadar `true` |
+| `SUPERADMIN_EMAIL` | önerilir | `siz@ornek.com` — süper yönetici hesabı. Tanımlı değilse süper yönetici `admin` ile girer. |
+| `REGISTRATION` | hayır | `closed` (varsayılan), `approval` (bekleme listesi, süper yönetici onaylar) ya da `open` |
+| `MAX_BRANDS_PER_USER` | hayır | `3` (süper yönetici için sınır yok) |
+| `EMAIL_FROM` | kayıt için | `Kervly <noreply@ornek.com>` |
+| `EMAIL_BINDING` | hayır | Resend yerine Cloudflare Email Service bağlamasını kullanmak için `true` (Workers Paid gerekir) |
+| `PUBLIC_URL` | hayır | `CUSTOM_DOMAIN`'den otomatik belirlenir. E-posta bağlantıları ve gizli depo için gerekir. |
 
 Bunlar gizli değil, ama repoda tutulmadıkları için fork'unuzda kişisel kimlik kalmaz.
 
@@ -50,26 +56,50 @@ Bunlar gizli değil, ama repoda tutulmadıkları için fork'unuzda kişisel kiml
 *Actions → Deploy → Run workflow*. Bundan sonra `main`'e yapılan her push otomatik yayına çıkar ve veritabanı migrasyonlarını uygular.
 `D1_DATABASE_ID` tanımlanmadan iş akışı hiçbir şey yapmaz.
 
-## 4. Yönetici hesabı (parola + 2FA)
+## 4. Süper yönetici hesabı (parola + 2FA)
+
+Süper yönetici kurulumun sahibidir: tüm kullanıcıları ve markaları görür, kayıtları onaylar, kendi markalarını yönetir.
 
 1. `<URL>` adresini açın; `/setup` sayfasına yönlenirsiniz.
 2. En az 12 karakterlik bir parola girip **Değerleri üret**'e basın. Değerler sadece tarayıcınızda üretilir.
 3. Dört değeri Cloudflare'de *Workers & Pages → worker'ınız → Settings → Variables and Secrets* bölümüne **Secret** olarak ekleyin.
    Bunlar `ADMIN_PASSWORD_HASH`, `ADMIN_TOTP_SECRET`, `ENCRYPTION_KEY` ve `CONSENT_SECRET`.
 4. `ADMIN_TOTP_SECRET` değerini telefonunuzdaki doğrulama uygulamasına ekleyin.
-5. `<URL>` adresinde parola ve 6 haneli kodla giriş yapın.
+5. `<URL>` adresinde `SUPERADMIN_EMAIL`, parolanız ve 6 haneli kodla giriş yapın.
+
+## 5. Kullanıcılar ve e-posta (isteğe bağlı)
+
+`REGISTRATION=approval` ya da `open` ise insanlar `<URL>/signup` adresinden e-postalarıyla hesap açabilir. Gelen bağlantıyla
+adreslerini doğrular ve parolalarını orada belirlerler. `approval` modunda hesap, süper yönetici *Yönetim* sayfasından
+onaylayana kadar bekler. Kullanıcılar *Hesap* sayfasından 2FA açabilir.
+
+E-posta göndermek için `EMAIL_FROM` ve bir sağlayıcı gerekir:
+
+- **Resend** (ücretsiz plan): alan adınızı [resend.com](https://resend.com)'da doğrulayın, ardından Cloudflare secret'ı `RESEND_API_KEY` ekleyin.
+- **Cloudflare Email Service**: `EMAIL_BINDING=true` değişkenini ayarlayın (Workers Paid ve gönderim alan adı gerekir).
+
+Sağlayıcı yoksa bağlantılar yalnızca worker loguna yazılır; bu durumda `REGISTRATION=closed` bırakın.
 
 > `ENCRYPTION_KEY` değişirse kayıtlı platform bağlantıları açılamaz; hesapları yeniden bağlamanız gerekir.
 
-## 5. Markalar
+## 6. Markalar ve GitHub depolama
 
-Panelde *Markalar → Yeni marka* bölümünü açın. Kimlik, ad ve **video izin listesi** girin. İzin listesi, videolarınızın
-bulunduğu klasördür; örneğin `https://raw.githubusercontent.com/siz/videolar/main/klipler/`. Ardından günlük sınırı ve saat
-dilimini ayarlayın. Kervly sadece bu öneklerin altındaki `.mp4` dosyalarını paylaşır.
+Panelde *Markalar → Yeni marka* bölümünü açın. Kimlik, ad, günlük sınır ve saat dilimi girin. Sonra marka kartında
+**Depoyu ayarla**'ya tıklayın:
 
-Her platform için **bir kez** uygulama açarsınız (aşağıda). Sonra her marka kendi hesabını panelden **Bağla** ile bağlar.
+1. Markanın videoları için bir depo oluşturun (gizli olabilir).
+2. GitHub → *Settings → Developer settings → Fine-grained tokens → Generate new token*. *Repository access*: yalnızca o depo.
+   *Permissions → Contents*: **Read and write**. Uygun bir son kullanma tarihi seçin.
+3. Depoyu (`sahip/ad`), dalı, klasörü ve tokenı girip **Doğrula ve kaydet**'e basın. Kervly tokenın yazabildiğini kontrol eder
+   ve şifreli saklar.
 
-## 6. YouTube
+Artık gönderi penceresinden video yükleyebilir (her biri 50 MB'a kadar) ya da klasördeki videoları seçebilirsiniz. Gizli
+depodaki videolar Instagram ve TikTok'a 30 dakikalık imzalı bağlantılarla verilir, bu yüzden `PUBLIC_URL` tanımlı olmalıdır.
+
+Alternatif olarak marka ayarlarında **herkese açık video önekleri** (ör. `https://raw.githubusercontent.com/siz/videolar/main/klipler/`)
+ekleyebilirsiniz. Kervly yalnızca markanın depolama klasöründeki veya bu öneklerin altındaki `.mp4` dosyalarını paylaşır.
+
+## 7. YouTube
 
 1. [Google Cloud Console](https://console.cloud.google.com/)'da proje açın ve **YouTube Data API v3**'ü etkinleştirin.
 2. *Google Auth Platform* bölümünde:
@@ -83,7 +113,7 @@ Her platform için **bir kez** uygulama açarsınız (aşağıda). Sonra her mar
 6. Google, doğrulanmamış projelerden yüklenen videoları **özel** tutabilir. İlk video özel kalırsa
    *YouTube API Services – Audit and Quota Extension Form*'u doldurun (ücretsiz).
 
-## 7. Instagram (Reels)
+## 8. Instagram (Reels)
 
 Önkoşul: Instagram hesabı **profesyonel** olmalı (İşletme ya da İçerik Üreticisi).
 
@@ -96,7 +126,7 @@ Her platform için **bir kez** uygulama açarsınız (aşağıda). Sonra her mar
 4. *Development* modunda, uygulamada rolü olan hesaplar paylaşım yapabilir. Kendi markalarınız için bu yeterli.
 5. Panel → marka seçin → Instagram → **Bağla**. Başka bir markanın hesabını bağlamadan önce Instagram'a o hesapla girin.
 
-## 8. TikTok
+## 9. TikTok
 
 1. [TikTok for Developers](https://developers.tiktok.com/)'da *Manage apps → Connect an app*.
 2. Uygulama bilgileri: Terms URL `<URL>/terms`, Privacy URL `<URL>/privacy`, platform *Web*, web sitesi `<URL>`.
@@ -107,14 +137,16 @@ Her platform için **bir kez** uygulama açarsınız (aşağıda). Sonra her mar
 7. **Denetim:** Content Posting API denetimi onaylanana kadar TikTok sadece gizli (`SELF_ONLY`) paylaşıma izin verir.
    `TIKTOK_UNAUDITED=true` iken Kervly bunu zorunlu kılar. Onaydan sonra değişkeni `false` yapın.
 
-## 9. Yapay zekâ ajanını bağlama (MCP)
+## 10. Yapay zekâ ajanını bağlama (MCP)
 
-Claude'da *Settings → Connectors → Add custom connector* deyin ve URL olarak `<URL>/mcp` girin. **Connect**'e basın, parola ve
-2FA koduyla giriş yapın, onay ekranında **İzin ver** deyin. OAuth destekleyen diğer MCP istemcileri de aynı şekilde bağlanır.
+Claude'da *Settings → Connectors → Add custom connector* deyin ve URL olarak `<URL>/mcp` girin. **Connect**'e basın, giriş yapın ve onay
+ekranında **İzin ver** deyin. Her kullanıcı kendi hesabıyla bağlanır ve yalnızca kendi markalarını görür. OAuth destekleyen diğer MCP istemcileri de aynı şekilde bağlanır.
 
 Örnek istek: *"Kervly markalarımı listele, sonra https://…/klip.mp4 videosunu yarın İstanbul saatiyle 10:00'da YouTube ve TikTok'a planla."*
 
 ## Sorun giderme
+- **Depolama: "token geçersiz" / "yazma izni yok"**: tokenın süresi dolmuş ya da o depoda *Contents: Read and write* yetkisi yok.
+- **Doğrulama e-postası gelmiyor**: `EMAIL_FROM`, sağlayıcı secret'ı ve worker logunu kontrol edin.
 - **"Uygulama anahtarları tanımlı değil"**: platformun client id ya da secret'ı eksik.
 - **YouTube "token yenileme başarısız"**: Google uygulaması hâlâ test modunda. *In production* yapıp yeniden bağlayın.
 - **"Yükleme kesintiye uğradı"**: platformda video çıkmış mı bakın; çıkmadıysa **Tekrar**'a basın.

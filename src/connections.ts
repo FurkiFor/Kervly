@@ -1,7 +1,7 @@
-import { PLATFORMS, type Env, type Platform } from "./env";
+import { PLATFORMS, type Actor, type Env, type Platform } from "./env";
 import { decryptJson, encryptJson } from "./crypto";
 import { audit } from "./db";
-import { getBrand } from "./brands";
+import { getBrand, listBrands } from "./brands";
 import { AppError, localize } from "./i18n";
 import type { ConnectedAccount, PlatformAdapter, TokenSet } from "./platforms/types";
 import { youtube } from "./platforms/youtube";
@@ -50,7 +50,7 @@ async function updateTokens(env: Env, brandId: string, platform: Platform, token
 
 export async function deleteConnection(env: Env, brandId: string, platform: Platform, actor: string): Promise<void> {
   await env.DB.prepare("DELETE FROM connections WHERE brand_id = ? AND platform = ?").bind(brandId, platform).run();
-  await audit(env, actor, "connection.delete", `${brandId}/${platform}`);
+  await audit(env, actor, "connection.delete", `${brandId}/${platform}`, { brand: brandId });
 }
 
 /** Decrypts a connection and refreshes its token when needed. */
@@ -62,7 +62,7 @@ export async function getAccount(env: Env, brandId: string, platform: Platform, 
   if (fresh) {
     tokens = fresh;
     await updateTokens(env, brandId, platform, tokens);
-    await audit(env, "system", "connection.refresh", `${brandId}/${platform}`);
+    await audit(env, "system", "connection.refresh", `${brandId}/${platform}`, { brand: brandId });
   }
   return { tokens, account_id: row.account_id ?? "", account_name: row.account_name ?? "" };
 }
@@ -78,10 +78,8 @@ export interface ConnectionStatus {
 }
 
 /** Token-free connection summary (optionally for one brand). */
-export async function connectionStatus(env: Env, brandId?: string): Promise<ConnectionStatus[]> {
-  const brands = brandId
-    ? [(await getBrand(env, brandId)).id]
-    : (await env.DB.prepare("SELECT id FROM brands ORDER BY created_at").all<{ id: string }>()).results.map((b) => b.id);
+export async function connectionStatus(env: Env, actor: Actor, brandId?: string): Promise<ConnectionStatus[]> {
+  const brands = brandId ? [(await getBrand(env, brandId, actor)).id] : (await listBrands(env, actor)).map((b) => b.id);
   const { results } = await env.DB.prepare("SELECT brand_id, platform, account_name, access_expires_at, updated_at FROM connections").all<ConnRow>();
   return brands.flatMap((b) =>
     PLATFORMS.map((p) => {
@@ -106,7 +104,7 @@ export async function refreshAllConnections(env: Env): Promise<void> {
     try {
       await getAccount(env, r.brand_id, r.platform);
     } catch (e) {
-      await audit(env, "system", "connection.refresh_error", `${r.brand_id}/${r.platform}: ${localize(e, "en").slice(0, 300)}`);
+      await audit(env, "system", "connection.refresh_error", `${r.brand_id}/${r.platform}: ${localize(e, "en").slice(0, 300)}`, { brand: r.brand_id });
     }
   }
 }
