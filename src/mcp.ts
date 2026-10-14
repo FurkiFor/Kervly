@@ -1,7 +1,8 @@
 import { PLATFORMS, type Actor, type Env } from "./env";
 import { cancelPost, createPost, editPost, getPostFor, listPosts, parseWhen, recentAudit, retryPost, toView, type NewPostInput } from "./db";
 import { connectionStatus } from "./connections";
-import { listBrands } from "./brands";
+import { getBrand, listBrands } from "./brands";
+import { analytics, calendar, nextSlots, suggestSlots } from "./insights";
 import { AppError, localize, parseLang, type Lang } from "./i18n";
 import { APP_NAME, APP_VERSION } from "./config";
 
@@ -16,7 +17,7 @@ const postProps = {
   title: { type: "string", description: "Title (YouTube title, max 100 chars). Not used by Instagram." },
   caption: { type: "string", description: "Description / post text (max 2200 chars)" },
   tags: { type: "array", items: { type: "string" }, description: "YouTube tags" },
-  publish_at: { type: "string", description: "Publish time, ISO 8601 with a time zone, e.g. 2026-10-15T10:00:00+04:00" },
+  publish_at: { type: "string", description: "Publish time, ISO 8601 with a time zone, e.g. 2026-10-15T10:00:00+04:00. Must be at least a minute ahead and within 60 days." },
 };
 
 export const TOOLS = [
@@ -28,9 +29,52 @@ export const TOOLS = [
     annotations: { readOnlyHint: true },
   },
   {
+    name: "get_calendar",
+    title: "Get the calendar",
+    description:
+      "Month view of a brand's calendar in the brand's time zone: every post per day, how many are queued per platform and how many slots are left before the daily limit. Check it before scheduling.",
+    inputSchema: {
+      type: "object",
+      properties: { brand: brandProp, month: { type: "string", description: "YYYY-MM, defaults to the current month in the brand's time zone" } },
+      required: ["brand"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "suggest_slots",
+    title: "Suggest free slots",
+    description: "Returns the next free calendar slots (the brand's default posting times, below the daily limit) so you can pick publish_at values without clashes.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        brand: brandProp,
+        platforms: { type: "array", items: { type: "string", enum: [...PLATFORMS] }, description: "Defaults to all platforms; a slot is only free if it is free on each of them" },
+        count: { type: "integer", minimum: 1, maximum: 20, description: "How many slots (default 5)" },
+      },
+      required: ["brand"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "get_analytics",
+    title: "Publishing analytics",
+    description:
+      "Publishing statistics for a brand over the last 7, 30 or 90 days: published/failed counts, success rate, per-platform and per-source split, busiest hours, daily series, posting streak and the most frequent errors. Based on Kervly's own queue, not on platform view counts.",
+    inputSchema: {
+      type: "object",
+      properties: { brand: brandProp, days: { type: "integer", enum: [7, 30, 90], description: "Default 30" } },
+      required: ["brand"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
     name: "schedule_post",
     title: "Schedule a post",
-    description: "Queues a video for one or more platforms of a brand at the given time. One post is created per platform.",
+    description:
+      "Puts a video into the brand's calendar for one or more platforms. Nothing is published immediately: the scheduler publishes it at publish_at. If publish_at is omitted, the next free default posting time of the brand is used. One post is created per platform.",
     inputSchema: {
       type: "object",
       properties: {
@@ -43,7 +87,7 @@ export const TOOLS = [
             "Per-platform options keyed by platform: {youtube:{privacy,category,madeForKids,notifySubscribers}, instagram:{shareToFeed}, tiktok:{privacy,disableComment,disableDuet,disableStitch}}",
         },
       },
-      required: ["brand", "platforms", "media_url", "publish_at"],
+      required: ["brand", "platforms", "media_url"],
       additionalProperties: false,
     },
   },
@@ -134,6 +178,14 @@ export async function callTool(env: Env, actor: Actor, name: string, args: Args,
       if (new Set(platforms).size !== platforms.length) throw new AppError("v.platforms_dupe");
       const allOpts = (args.options ?? {}) as Record<string, unknown>;
       if (typeof allOpts !== "object" || Array.isArray(allOpts)) throw new AppError("v.options_object");
+      // No time given: take the next free default slot of the brand's calendar (never "right now")
+      let publishAt = args.publish_at;
+      if (publishAt === undefined || publishAt === null || publishAt === "") {
+        const brand = await getBrand(env, args.brand, actor);
+        const [slot] = await nextSlots(env, brand, platforms as never, 1);
+        if (!slot) throw new AppError("post.no_slot");
+        publishAt = slot.publish_at;
+      }
       const created = [];
       const errors = [];
       for (const platform of platforms) {
@@ -143,7 +195,7 @@ export async function callTool(env: Env, actor: Actor, name: string, args: Args,
           title: args.title,
           caption: args.caption,
           tags: platform === "youtube" ? args.tags : undefined,
-          publish_at: args.publish_at,
+          publish_at: publishAt,
           options: allOpts[platform as string],
         };
         try {
@@ -155,6 +207,12 @@ export async function callTool(env: Env, actor: Actor, name: string, args: Args,
       if (!created.length) throw new Error(errors.map((e) => `${e.platform}: ${e.error}`).join("; "));
       return { created, errors };
     }
+    case "get_calendar":
+      return calendar(env, actor, String(args.brand ?? ""), args.month as string | undefined, lang);
+    case "suggest_slots":
+      return suggestSlots(env, actor, String(args.brand ?? ""), args.platforms as never, Number(args.count) || 5);
+    case "get_analytics":
+      return analytics(env, actor, String(args.brand ?? ""), args.days, lang);
     case "list_posts":
       return {
         posts: await listPosts(
@@ -218,7 +276,10 @@ async function dispatch(env: Env, actor: Actor, req: RpcRequest, lang: Lang) {
         serverInfo: { name: APP_NAME.toLowerCase(), title: APP_NAME, version: APP_VERSION },
         instructions:
           `${APP_NAME}: multi-brand video publishing queue for YouTube Shorts, Instagram Reels and TikTok. ` +
-          "Call list_brands first. Use schedule_post with a time-zone-aware publish_at, and list_posts with status=error to check failures.",
+          "Rules: (1) Call list_brands first. (2) Nothing sent over MCP is published immediately: every post goes into the brand's calendar and the scheduler (runs every 5 minutes) publishes it at publish_at. " +
+          "(3) Look at get_calendar or suggest_slots before scheduling; respect each brand's daily limit and default posting times. If you omit publish_at, the next free default slot is used. " +
+          "(4) Always give publish_at as ISO 8601 with a time zone, at least a minute ahead and at most 60 days out. " +
+          "(5) Check list_posts with status=error for failures, retry_post to retry, get_analytics for results.",
       };
     }
     case "ping":

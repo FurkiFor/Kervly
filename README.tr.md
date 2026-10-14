@@ -48,7 +48,9 @@
 | **Hesaplar** | Doğrulamalı e-posta kaydı, parola sıfırlama, isteğe bağlı TOTP 2FA ve üç kayıt modu: `closed`, `approval` (bekleme listesi), `open`. |
 | **Süper yönetici** | Tüm kullanıcıları ve markaları görür, hesapları onaylar veya devre dışı bırakır, kendi markalarını herkes gibi yönetir. |
 | **Panel** | Kurulum listesiyle genel bakış; düzenle / kopyala / iptal / yeniden dene; yükleme ilerlemeli video seçici; etkinlik kaydı. Açık & koyu tema, mobil görünüm, Türkçe & İngilizce. |
-| **MCP sunucusu** | `/mcp` (Streamable HTTP + OAuth 2.1). Araçlar: `list_brands`, `schedule_post`, `list_posts`, `get_post`, `update_post`, `cancel_post`, `retry_post`, `connection_status`, `recent_activity`. Her kullanıcı yalnızca kendi markalarını görür. |
+| **Takvim** | Marka başına, markanın saat diliminde aylık görünüm. Bir güne tıklayıp gönderilerini görür ve yenisini eklersiniz; günlük limiti dolan günler işaretlenir. Zamanlayıcı 5 dakikada bir yayınlar. |
+| **Analitik** | Son 7 / 30 / 90 gün: yayınlanan ve başarısız gönderiler, başarı oranı, platform dağılımı, en yoğun saatler, gün serisi ve en sık hatalar (Kervly'nin kendi kuyruğundan; platformların izlenme sayıları dahil değildir). |
+| **MCP sunucusu** | `/mcp` (Streamable HTTP + OAuth 2.1). Araçlar: `list_brands`, `get_calendar`, `suggest_slots`, `schedule_post`, `list_posts`, `get_post`, `update_post`, `cancel_post`, `retry_post`, `get_analytics`, `connection_status`, `recent_activity`. MCP'den gelen hiçbir şey anında yayınlanmaz: gönderiler markanın takvimine girer, `publish_at` verilmezse bir sonraki boş varsayılan saat kullanılır. Her kullanıcı yalnızca kendi markalarını görür. |
 | **Yayıncı** | YouTube resumable yükleme, Instagram Reels container, TikTok Direct Post. Videolar belleğe alınmadan akışla aktarılır; işleme durumu izlenir, tokenlar süresi dolmadan yenilenir. |
 
 ## Ekran görüntüleri

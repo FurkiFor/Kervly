@@ -12,7 +12,7 @@
   const PF_SHORT = { youtube: "YT", instagram: "IG", tiktok: "TT" };
   const ICON = BOOT.icons;
 
-  const S = { csrf: "", brands: [], brand: "", view: "overview", filters: { status: "", platform: "", range: "upcoming" }, errors: 0, media: {} };
+  const S = { csrf: "", brands: [], brand: "", view: "overview", filters: { status: "", platform: "", range: "upcoming" }, errors: 0, media: {}, cal: { month: "", day: "" }, an: { days: 30 } };
 
   // ---------- helpers ----------
   function toast(msg, isErr) {
@@ -113,7 +113,7 @@
   }
 
   // ---------- navigation ----------
-  const VIEWS = ["overview", "posts", "brands", "setup", "activity", "account", "admin"];
+  const VIEWS = ["overview", "posts", "calendar", "analytics", "brands", "setup", "activity", "account", "admin"];
   function setActive() {
     $$("[data-nav]").forEach((a) => a.classList.toggle("on", a.dataset.nav === S.view));
     $$(".err-count").forEach((c) => {
@@ -131,11 +131,14 @@
       if (!S.brands.length && !["brands", "setup", "activity", "account", "admin"].includes(S.view)) {
         main.innerHTML = renderWelcome();
       } else {
-        main.innerHTML = await ({ overview: viewOverview, posts: viewPosts, brands: viewBrands, setup: viewSetup, activity: viewActivity, account: viewAccount, admin: viewAdmin }[S.view])();
+        main.innerHTML = await ({ overview: viewOverview, posts: viewPosts, calendar: viewCalendar, analytics: viewAnalytics, brands: viewBrands, setup: viewSetup, activity: viewActivity, account: viewAccount, admin: viewAdmin }[S.view])();
       }
     } catch (e) {
       main.innerHTML = '<div class="card">' + empty("alert", e.message) + "</div>";
     }
+    // The CSP forbids inline style attributes, so chart sizes are applied here
+    $$("[data-h]", main).forEach((e) => (e.style.height = e.dataset.h + "%"));
+    $$("[data-w]", main).forEach((e) => (e.style.width = e.dataset.w + "%"));
     main.removeAttribute("aria-busy");
     window.scrollTo(0, 0);
   }
@@ -248,6 +251,93 @@
       ? groups.map((g) => '<div class="day"><div class="day-h"><h3>' + esc(dayLabel(g.k)) + '</h3><span class="tiny faint">' + g.items.length + '</span></div><div class="plist">' + g.items.map((p) => postRow(p)).join("") + "</div></div>").join("")
       : '<div class="plist">' + empty("calendar", T.no_posts) + "</div>";
     return head(T.posts, esc(tr("tz_note", { tz: tz() })), newPostBtn()) + filters + body;
+  }
+
+  // ---------- calendar ----------
+  function shiftMonth(m, n) {
+    const [y, mo] = m.split("-").map(Number);
+    const d = new Date(Date.UTC(y, mo - 1 + n, 1));
+    return d.getUTCFullYear() + "-" + String(d.getUTCMonth() + 1).padStart(2, "0");
+  }
+  function monthTitle(m) {
+    const [y, mo] = m.split("-").map(Number);
+    return new Intl.DateTimeFormat(LANG, { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(y, mo - 1, 15)));
+  }
+  async function viewCalendar() {
+    const c = await api("/api/calendar?brand=" + encodeURIComponent(S.brand) + (S.cal.month ? "&month=" + S.cal.month : ""));
+    S.cal.month = c.month;
+    if (!S.cal.day || S.cal.day.slice(0, 7) !== c.month) S.cal.day = c.today.slice(0, 7) === c.month ? c.today : c.month + "-01";
+    const lead = (new Date(Date.UTC(+c.month.slice(0, 4), +c.month.slice(5, 7) - 1, 1)).getUTCDay() + 6) % 7;
+    const dow = [0, 1, 2, 3, 4, 5, 6].map((i) => '<div class="cal-dow">' + esc(T["wd" + i]) + "</div>").join("");
+    let cells = "";
+    for (let i = 0; i < lead; i++) cells += '<div class="cal-cell blank"></div>';
+    for (const d of c.days) {
+      const active = d.posts.filter((p) => p.status !== "cancelled");
+      const dots = active.slice(0, 4).map((p) => '<span class="cal-dot ' + p.platform + " " + p.status + '" title="' + esc(PF[p.platform] + " · " + fmtTime(p.publish_at)) + '"></span>').join("");
+      const more = active.length > 4 ? '<span class="tiny faint">' + esc(tr("cal_more", { n: active.length - 4 })) + "</span>" : "";
+      const hasErr = active.some((p) => p.status === "error");
+      cells +=
+        '<button class="cal-cell' + (d.date === c.today ? " today" : "") + (d.date === S.cal.day ? " sel" : "") + (hasErr ? " haserr" : "") + '" data-cal-day="' + d.date + '">' +
+        '<span class="cal-n">' + Number(d.date.slice(8)) + "</span>" + (active.length ? '<span class="cal-dots">' + dots + more + "</span>" : "") + "</button>";
+    }
+    const sel = c.days.find((d) => d.date === S.cal.day);
+    const list = sel && sel.posts.length
+      ? '<div class="plist">' + sel.posts.map((p) => postRow(p)).join("") + "</div>"
+      : '<div class="plist">' + empty("calendar", T.cal_none) + "</div>";
+    const free = sel ? Math.min(...Object.keys(PF).map((p) => sel.free[p])) : 0;
+    const cap = free > 0 ? '<span class="badge info"><span class="dot"></span>' + esc(tr("cal_slots", { n: free })) + "</span>" : '<span class="badge warn"><span class="dot"></span>' + esc(T.cal_full) + "</span>";
+    const nav =
+      '<div class="row"><button class="btn ghost sm" data-cal-shift="-1" aria-label="‹">‹</button><strong class="cal-title">' + esc(monthTitle(c.month)) + '</strong><button class="btn ghost sm" data-cal-shift="1" aria-label="›">›</button>' +
+      '<button class="btn ghost sm" data-cal-shift="today">' + esc(T.cal_today) + "</button></div>";
+    return (
+      head(T.calendar, esc(tr("cal_sub", { brand: cur().name })) + " " + esc(tr("tz_note", { tz: c.timezone })), newPostBtn()) +
+      '<div class="stack"><div class="card cal">' + nav + '<div class="cal-grid">' + dow + cells + "</div></div>" +
+      '<div class="stack-sm"><div class="row between"><h2>' + esc(dayLabel(S.cal.day)) + "</h2><div class=\"row\">" + cap +
+      '<button class="btn sm" data-act="cal-new" data-date="' + esc(S.cal.day) + '">' + ICON.plus + esc(T.cal_add) + "</button></div></div>" + list + "</div></div>"
+    );
+  }
+
+  // ---------- analytics ----------
+  function barChart(series) {
+    const max = Math.max(1, ...series.map((d) => d.published + d.error));
+    const bars = series
+      .map((d) => {
+        const h = (n) => Math.round((n / max) * 100);
+        const label = dayLabel(d.date) + ": " + d.published + " / " + d.error;
+        return '<div class="bar" title="' + esc(label) + '"><div class="bar-e" data-h="' + h(d.error) + '"></div><div class="bar-p" data-h="' + h(d.published) + '"></div></div>';
+      })
+      .join("");
+    return '<div class="bars" role="img" aria-label="' + esc(T.an_daily) + '">' + bars + "</div>";
+  }
+  function hbar(rows) {
+    const max = Math.max(1, ...rows.map((r) => r.n));
+    return rows.map((r) => '<div class="hb"><div class="hb-l">' + r.label + '</div><div class="hb-t"><div class="hb-f" data-w="' + Math.round((r.n / max) * 100) + '"></div></div><div class="hb-n">' + esc(r.n) + "</div></div>").join("");
+  }
+  async function viewAnalytics() {
+    const a = await api("/api/analytics?brand=" + encodeURIComponent(S.brand) + "&days=" + S.an.days);
+    const t = a.totals;
+    const seg = [7, 30, 90].map((n) => '<button class="' + (a.days === n ? "on" : "") + '" data-an-days="' + n + '">' + esc(tr("an_range", { n })) + "</button>").join("");
+    const stats =
+      '<div class="grid g4">' + stat(T.an_published, t.published) + stat(T.an_failed, t.failed, t.failed > 0) +
+      stat(T.an_success, t.success_rate === null ? "–" : t.success_rate + "%") + stat(T.an_streak, t.streak_days) + "</div>" +
+      '<div class="grid g4">' + stat(T.an_upcoming, t.upcoming) + stat(T.an_avg, t.avg_per_active_day) + stat(T.st_today, a.series[a.series.length - 1] ? a.series[a.series.length - 1].published : 0) + stat(T.s_cancelled, t.cancelled) + "</div>";
+    const empty0 = !t.published && !t.failed;
+    const daily = '<div class="card"><div class="card-head"><h2>' + esc(T.an_daily) + '</h2><span class="legend"><i class="lg ok"></i>' + esc(T.an_published) + '<i class="lg err"></i>' + esc(T.an_failed) + "</span></div>" +
+      (empty0 ? empty("activity", T.an_no_data) : barChart(a.series)) + "</div>";
+    const plat = '<div class="card"><div class="card-head"><h2>' + esc(T.an_platforms) + "</h2></div>" +
+      hbar(Object.keys(PF).map((p) => ({ label: pfBadge(p), n: a.by_platform[p].published }))) + "</div>";
+    const hours = '<div class="card"><div class="card-head"><h2>' + esc(T.an_hours) + "</h2></div>" +
+      (empty0 ? empty("calendar", T.an_no_data) : '<div class="hours">' + a.by_hour.map((n, h) => '<div class="hr" title="' + String(h).padStart(2, "0") + ":00 · " + n + '"><div class="hr-b" data-h="' + Math.round((n / Math.max(1, ...a.by_hour)) * 100) + '"></div><span>' + (h % 6 === 0 ? h : "") + "</span></div>").join("") + "</div>") + "</div>";
+    const src = '<div class="card"><div class="card-head"><h2>' + esc(T.an_source) + "</h2></div>" +
+      hbar([{ label: esc(T.an_src_ui), n: a.by_source.ui }, { label: esc(T.an_src_mcp), n: a.by_source.mcp }]) + "</div>";
+    const errs = '<div class="card"><div class="card-head"><h2>' + esc(T.an_errors) + "</h2></div>" +
+      (a.top_errors.length
+        ? a.top_errors.map((e) => '<div class="check"><div class="ct grow">' + pfBadge(e.platform) + " " + esc(e.message || "") + '</div><span class="tiny faint">' + esc(tr("an_times", { n: e.count })) + "</span></div>").join("")
+        : empty("check", T.an_no_errors)) + "</div>";
+    return (
+      head(T.analytics, esc(tr("an_sub", { brand: cur().name })), '<div class="seg">' + seg + "</div>") +
+      '<div class="stack">' + stats + daily + '<div class="grid g2 align-start">' + plat + src + "</div>" + '<div class="grid g2 align-start">' + hours + errs + "</div></div>"
+    );
   }
 
   // ---------- post dialog ----------
@@ -672,13 +762,26 @@
 
   // ---------- events ----------
   document.addEventListener("click", async (ev) => {
-    const el = ev.target.closest("[data-act],[data-copy],[data-filter],[data-time],[data-day],[data-media],[data-close]");
+    const el = ev.target.closest("[data-act],[data-copy],[data-filter],[data-time],[data-day],[data-media],[data-close],[data-cal-day],[data-cal-shift],[data-an-days]");
     if (!el) return;
     try {
       if (el.dataset.copy) {
         await navigator.clipboard.writeText(el.dataset.copy);
         toast(T.copied);
         return;
+      }
+      if (el.dataset.calDay) {
+        S.cal.day = el.dataset.calDay;
+        return route();
+      }
+      if (el.dataset.calShift) {
+        S.cal.month = el.dataset.calShift === "today" ? "" : shiftMonth(S.cal.month, Number(el.dataset.calShift));
+        S.cal.day = "";
+        return route();
+      }
+      if (el.dataset.anDays) {
+        S.an.days = Number(el.dataset.anDays);
+        return route();
       }
       if (el.dataset.close) return el.closest("dialog").close();
       if (el.dataset.filter) {
@@ -701,6 +804,10 @@
       switch (el.dataset.act) {
         case "new-post":
           return openPostDialog("new", null);
+        case "cal-new":
+          openPostDialog("new", null);
+          $("#post-form").date.value = el.dataset.date;
+          return syncChips();
         case "edit":
           return openPostDialog("edit", S.postCache[id]);
         case "dup":

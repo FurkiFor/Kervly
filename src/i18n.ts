@@ -64,6 +64,8 @@ const MESSAGES = {
   "v.when_tz": { en: "publish_at must include a time zone, e.g. 2026-10-15T10:00:00+04:00", tr: "publish_at saat dilimi içermeli, ör. 2026-10-15T10:00:00+04:00" },
   "v.when_invalid": { en: "publish_at is not a valid date", tr: "publish_at geçersiz tarih" },
   "v.when_past": { en: "publish_at must be at least 1 minute in the future", tr: "publish_at en az 1 dakika sonrası olmalı" },
+  "v.month": { en: "month must look like 2026-10", tr: "month 2026-10 biçiminde olmalı" },
+  "post.no_slot": { en: "No free slot in the next 60 days. Raise the daily limit or add posting times for this brand.", tr: "Önümüzdeki 60 günde boş zaman dilimi yok. Günlük limiti artırın veya markaya paylaşım saati ekleyin." },
   "v.when_far": { en: "publish_at can be at most 60 days in the future", tr: "publish_at en fazla 60 gün sonrası olabilir" },
   "v.local_date": { en: "Date must be in YYYY-MM-DDTHH:mm format", tr: "Tarih biçimi YYYY-MM-DDTHH:mm olmalı" },
   "v.options_object": { en: "options must be an object", tr: "options nesne olmalı" },

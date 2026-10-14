@@ -68,6 +68,15 @@ check("second brand", r.status === 200);
 
 // 6) Create posts (dashboard)
 const media = "https://raw.githubusercontent.com/example/videos/main/clips/demo.mp4";
+{
+  const c = await (await fetch(`${BASE}/api/calendar?brand=demo`, { headers: { cookie } })).json();
+  check("dashboard calendar API", /^\d{4}-\d{2}$/.test(c.month ?? "") && c.days?.length >= 28 && c.max_posts_per_day === 5, JSON.stringify(c).slice(0, 200));
+  const a = await (await fetch(`${BASE}/api/analytics?brand=demo&days=90`, { headers: { cookie } })).json();
+  check("dashboard analytics API", a.days === 90 && a.series?.length === 90 && a.totals, JSON.stringify(a).slice(0, 200));
+  r = await fetch(`${BASE}/api/calendar?brand=demo&month=nope`, { headers: { cookie } });
+  check("calendar API rejects a bad month", r.status === 400);
+}
+
 const when = new Date(Date.now() + 2 * 86400_000);
 const localWhen = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Dubai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(when).replace(" ", "T");
 r = await fetch(`${BASE}/api/posts`, { method: "POST", headers: H, body: JSON.stringify({ brand: "demo", platforms: ["youtube", "tiktok"], media_url: media, title: "Test", caption: "Description", tags: ["demo"], publish_at_local: localWhen }) });
@@ -137,7 +146,7 @@ let m = await call("initialize", { protocolVersion: "2025-06-18", capabilities: 
 check("MCP initialize", m.body?.result?.serverInfo?.name === "kervly");
 check("notification → 202", (await fetch(`${BASE}/mcp`, { method: "POST", headers: { Authorization: `Bearer ${tok.access_token}`, "Content-Type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) })).status === 202);
 m = await call("tools/list", {});
-check("MCP tools/list", m.body?.result?.tools?.length === 9);
+check("MCP tools/list", m.body?.result?.tools?.length === 12);
 m = await call("tools/call", { name: "list_brands", arguments: {} });
 check("MCP list_brands", m.body?.result?.structuredContent?.brands?.length === 2);
 const when2 = new Date(Date.now() + 3 * 86400_000).toISOString().replace("Z", "+00:00");
@@ -150,6 +159,23 @@ m = await call("tools/call", { name: "cancel_post", arguments: { id: pid } });
 check("MCP cancel_post", m.body?.result?.structuredContent?.status === "cancelled");
 m = await call("tools/call", { name: "schedule_post", arguments: { brand: "demo", platforms: ["youtube"], media_url: "https://raw.githubusercontent.com/x/y/main/videos/a.mp4", title: "t", publish_at: when2 } });
 check("MCP URL outside allowlist → isError", m.body?.result?.isError === true);
+// Calendar, auto-scheduling and analytics
+m = await call("tools/call", { name: "get_calendar", arguments: { brand: "demo" } });
+const cal = m.body?.result?.structuredContent;
+check("MCP get_calendar returns the month", /^\d{4}-\d{2}$/.test(cal?.month ?? "") && cal?.days?.length >= 28, JSON.stringify(m.body).slice(0, 300));
+m = await call("tools/call", { name: "get_calendar", arguments: { brand: "demo", month: "2026-13" } });
+check("MCP get_calendar rejects a bad month", m.body?.result?.isError === true);
+m = await call("tools/call", { name: "suggest_slots", arguments: { brand: "demo", platforms: ["youtube", "tiktok"], count: 3 } });
+const slots = m.body?.result?.structuredContent?.slots;
+check("MCP suggest_slots returns 3 future slots", slots?.length === 3 && slots.every((x) => Date.parse(x.publish_at) > Date.now() + 5 * 60_000), JSON.stringify(m.body).slice(0, 300));
+m = await call("tools/call", { name: "schedule_post", arguments: { brand: "demo", platforms: ["youtube"], media_url: media, title: "Auto slot" } });
+const auto = m.body?.result?.structuredContent?.created?.[0];
+check("MCP schedule_post without publish_at picks a free future slot", auto && Date.parse(auto.publish_at) > Date.now() + 5 * 60_000 && auto.status === "scheduled", JSON.stringify(m.body).slice(0, 300));
+m = await call("tools/call", { name: "get_analytics", arguments: { brand: "demo", days: 7 } });
+const an = m.body?.result?.structuredContent;
+check("MCP get_analytics shape", an?.days === 7 && an?.series?.length === 7 && an?.totals && an?.by_platform?.youtube, JSON.stringify(m.body).slice(0, 300));
+m = await call("tools/call", { name: "get_analytics", arguments: { brand: "yok" } });
+check("MCP get_analytics unknown brand → isError", m.body?.result?.isError === true);
 m = await call("tools/call", { name: "connection_status", arguments: {} });
 check("MCP connection_status has no tokens", !JSON.stringify(m.body).includes("access_token") && m.body?.result?.structuredContent?.connections?.length === 6);
 m = await call("tools/call", { name: "schedule_post", arguments: { brand: "yok", platforms: ["youtube"], media_url: media, title: "t", publish_at: when2 } });
@@ -196,6 +222,10 @@ check("fake token → 401", r.status === 401);
   check("user cannot list another brand's posts", (up.posts || []).length === 0);
   r = await fetch(`${BASE}/api/overview?brand=demo`, { headers: { cookie: ucookie } });
   check("user cannot open another brand", r.status === 400);
+  r = await fetch(`${BASE}/api/calendar?brand=demo`, { headers: { cookie: ucookie } });
+  check("user cannot open another brand's calendar", r.status === 400);
+  r = await fetch(`${BASE}/api/analytics?brand=demo`, { headers: { cookie: ucookie } });
+  check("user cannot open another brand's analytics", r.status === 400);
   r = await fetch(`${BASE}/api/admin/users`, { headers: { cookie: ucookie } });
   check("user cannot open admin API", r.status === 403);
   const adminPosts = await (await fetch(`${BASE}/api/posts?brand=demo&status=scheduled`, { headers: { cookie } })).json();

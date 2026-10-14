@@ -48,7 +48,9 @@ Paid schedulers cap your posts per month and keep your content in their cloud. K
 | **Accounts** | Email sign-up with verification, password reset, optional TOTP 2FA, and three registration modes: `closed`, `approval` (waitlist) and `open`. |
 | **Superadmin** | Sees every user and brand, approves or disables accounts, and manages their own brands like anyone else. |
 | **Dashboard** | Overview with setup checklist, post list with edit / duplicate / cancel / retry, video picker with upload progress, activity log. Light & dark mode, mobile layout, English & Turkish. |
-| **MCP server** | `/mcp` (Streamable HTTP + OAuth 2.1). Tools: `list_brands`, `schedule_post`, `list_posts`, `get_post`, `update_post`, `cancel_post`, `retry_post`, `connection_status`, `recent_activity`. Each user only sees their own brands. |
+| **Calendar** | Month view per brand in the brand's time zone. Click a day to see its posts and add one; days at the daily limit are marked. The scheduler publishes every 5 minutes. |
+| **Analytics** | Last 7 / 30 / 90 days: published and failed posts, success rate, per-platform split, busiest hours, posting streak and most frequent errors (from Kervly's own queue; platform view counts are not included). |
+| **MCP server** | `/mcp` (Streamable HTTP + OAuth 2.1). Tools: `list_brands`, `get_calendar`, `suggest_slots`, `schedule_post`, `list_posts`, `get_post`, `update_post`, `cancel_post`, `retry_post`, `get_analytics`, `connection_status`, `recent_activity`. Nothing sent over MCP is published immediately: posts go into the brand's calendar, and without `publish_at` the next free default posting time is used. Each user only sees their own brands. |
 | **Publisher** | YouTube resumable uploads, Instagram Reels containers, TikTok Direct Post. Videos are streamed, never buffered. Processing is tracked; tokens are refreshed before they expire. |
 
 ## Screenshots
@@ -145,7 +147,7 @@ npm run e2e                              # end-to-end test against the dev serve
 ```
 
 Locally, emails aren't sent; verification and reset links are printed in the dev server log.
-Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
+Kervly is developed by its owner only; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
