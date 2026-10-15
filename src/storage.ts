@@ -294,3 +294,91 @@ export async function setAccountStorage(env: Env, actor: { id: string }, input: 
 export async function clearAccountStorage(env: Env, actor: { id: string }): Promise<void> {
   await env.DB.prepare("UPDATE users SET storage_repo = NULL, storage_branch = NULL, storage_path = NULL, storage_token_enc = NULL, storage_private = 0 WHERE id = ?").bind(actor.id).run();
 }
+
+// ---------------- uploads from outside the dashboard (MCP) ----------------
+export const UPLOAD_LINK_TTL_MS = 15 * 60_000;
+
+/** A file name Kervly accepts (letters, digits, - _ .) ending in .mp4. */
+export function sanitizeFileName(input: string, fallback = `video-${Date.now()}`): string {
+  const base = decodeURIComponent(input.split(/[?#]/)[0].split("/").pop() || "").replace(/\.[A-Za-z0-9]{1,5}$/, "");
+  const clean = base.normalize("NFKD").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[-._]+|[-._]+$/g, "").slice(0, 100);
+  return `${clean || fallback}.mp4`;
+}
+
+async function uploadSig(env: Env, brandId: string, file: string, exp: number): Promise<string> {
+  const mac = await crypto.subtle.sign("HMAC", await mediaKey(env), new TextEncoder().encode(`upload.${brandId}.${file}.${exp}`));
+  return b64url(mac);
+}
+
+/** Short-lived link a client can PUT a video to (no login needed; the signature binds brand, file name and expiry). */
+export async function signedUploadUrl(env: Env, base: string, brandId: string, file: string, ttlMs = UPLOAD_LINK_TTL_MS): Promise<string> {
+  const exp = Date.now() + ttlMs;
+  return `${base.replace(/\/+$/, "")}/upload/${brandId}/${file}?e=${exp}&s=${await uploadSig(env, brandId, file, exp)}`;
+}
+
+export async function verifyUploadSig(env: Env, brandId: string, file: string, exp: string | null, sig: string | null): Promise<boolean> {
+  const e = Number(exp);
+  if (!sig || !Number.isFinite(e) || e < Date.now() || e > Date.now() + 2 * UPLOAD_LINK_TTL_MS) return false;
+  return timingSafeEqualStr(await uploadSig(env, brandId, file, e), sig);
+}
+
+/** Rejects anything that is not an MP4 (checks the "ftyp" box in the first bytes) without buffering the file. */
+export async function requireMp4(body: ReadableStream<Uint8Array>): Promise<ReadableStream<Uint8Array>> {
+  const reader = body.getReader();
+  const first: Uint8Array[] = [];
+  let have = 0;
+  while (have < 12) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    first.push(value);
+    have += value.length;
+  }
+  const head = new Uint8Array(have);
+  let o = 0;
+  for (const c of first) (head.set(c, o), (o += c.length));
+  if (have < 12 || String.fromCharCode(...head.subarray(4, 8)) !== "ftyp") {
+    await reader.cancel().catch(() => undefined);
+    throw new AppError("s.not_mp4");
+  }
+  return new ReadableStream({
+    start(ctrl) {
+      for (const c of first) ctrl.enqueue(c);
+    },
+    async pull(ctrl) {
+      const { done, value } = await reader.read();
+      if (done) ctrl.close();
+      else ctrl.enqueue(value);
+    },
+    cancel: (reason) => reader.cancel(reason),
+  });
+}
+
+/** Downloads a video from a public https URL (size must be announced and within the upload limit). */
+export async function downloadVideo(sourceUrl: string): Promise<{ body: ReadableStream<Uint8Array>; size: number }> {
+  let u: URL;
+  try {
+    u = new URL(sourceUrl);
+  } catch {
+    throw new AppError("s.source_invalid");
+  }
+  const host = u.hostname.toLowerCase();
+  if (u.protocol !== "https:" || u.username || u.password || host === "localhost" || host.endsWith(".local") || host.endsWith(".internal") || host.includes(":") || /^\d{1,3}(\.\d{1,3}){3}$/.test(host)) {
+    throw new AppError("s.source_invalid");
+  }
+  const r = await fetch(u, { redirect: "follow", headers: { "User-Agent": "kervly", Accept: "video/mp4,*/*" } });
+  if (!r.ok || !r.body) throw new AppError("s.source_failed", { status: r.status });
+  const size = Number(r.headers.get("Content-Length") || 0);
+  if (!size) {
+    await r.body.cancel();
+    throw new AppError("s.source_no_length");
+  }
+  if (size > MAX_UPLOAD_MB * 1024 * 1024) {
+    await r.body.cancel();
+    throw new AppError("s.too_big", { max: MAX_UPLOAD_MB });
+  }
+  if (/^text\//i.test(r.headers.get("Content-Type") || "")) {
+    await r.body.cancel();
+    throw new AppError("s.not_mp4");
+  }
+  return { body: r.body, size };
+}

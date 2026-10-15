@@ -5,6 +5,7 @@ import { html, json, newNonce, redirect, safeNext, securityHeaders, zonedToUtc }
 import { authFormPage, consentPage, dashboardPage, legalPage, loginPage, messagePage, setupPage } from "./ui";
 import { audit, cancelPost, createPost, editPost, getPostFor, getPostRow, listPosts, recentAudit, retryPost } from "./db";
 import { overview } from "./overview";
+import { handleUploadLink } from "./upload-link";
 import { analytics, calendar } from "./insights";
 import { youtubeStats } from "./youtube-stats";
 import { youtubeInsights, youtubeVideos } from "./youtube-insights";
@@ -510,6 +511,7 @@ export const app: ExportedHandler<Env> = {
     if (path === "/setup") return new Response(format(lang, "err.not_found"), { status: 404 });
 
     if (path.startsWith("/m/")) return handleSignedMedia(req, env, url);
+    if (path.startsWith("/upload/")) return handleUploadLink(req, env, url, lang);
 
     const page = await handleAccountPages(req, env, url, lang, nonce);
     if (page) return page;

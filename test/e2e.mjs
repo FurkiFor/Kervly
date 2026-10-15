@@ -159,7 +159,7 @@ let m = await call("initialize", { protocolVersion: "2025-06-18", capabilities: 
 check("MCP initialize", m.body?.result?.serverInfo?.name === "kervly");
 check("notification → 202", (await fetch(`${BASE}/mcp`, { method: "POST", headers: { Authorization: `Bearer ${tok.access_token}`, "Content-Type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) })).status === 202);
 m = await call("tools/list", {});
-check("MCP tools/list", m.body?.result?.tools?.length === 15);
+check("MCP tools/list", m.body?.result?.tools?.length === 17);
 m = await call("tools/call", { name: "list_brands", arguments: {} });
 check("MCP list_brands", m.body?.result?.structuredContent?.brands?.length === 2);
 const when2 = new Date(Date.now() + 3 * 86400_000).toISOString().replace("Z", "+00:00");
@@ -195,6 +195,14 @@ m = await call("tools/call", { name: "get_youtube_insights", arguments: { brand:
 check("MCP get_youtube_insights without a connection → isError", m.body?.result?.isError === true);
 r = await fetch(`${BASE}/api/youtube/insights?brand=demo`, { headers: { cookie } });
 check("dashboard insights API without a connection → 400", r.status === 400);
+m = await call("tools/call", { name: "create_upload_link", arguments: { brand: "demo", file_name: "clip.mp4" } });
+check("MCP create_upload_link without GitHub storage → isError", m.body?.result?.isError === true);
+m = await call("tools/call", { name: "upload_video", arguments: { brand: "demo", source_url: "http://127.0.0.1/a.mp4" } });
+check("MCP upload_video refuses a private/plain-http source", m.body?.result?.isError === true);
+r = await fetch(`${BASE}/upload/demo/clip.mp4?e=${Date.now() + 60000}&s=AAAA`, { method: "PUT", body: new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]) });
+check("upload link with a bad signature → 403", r.status === 403);
+r = await fetch(`${BASE}/upload/demo/clip.mp4`, { method: "GET" });
+check("upload link only accepts PUT", r.status === 405);
 m = await call("tools/call", { name: "get_calendar", arguments: {} });
 check("MCP asks for a brand when the user has several", m.body?.result?.isError === true && /demo/.test(JSON.stringify(m.body)), JSON.stringify(m.body).slice(0, 200));
 m = await call("tools/call", { name: "schedule_post", arguments: { brand: "demo", platforms: ["youtube"], media_url: media, title: "Opts", publish_at: when2, options: { youtube: { language: "tr", license: "creativeCommon", aiGenerated: false, embeddable: true } } } });

@@ -474,3 +474,114 @@ describe("youtube insights", () => {
     }
   });
 });
+
+describe("video upload helpers", () => {
+  it("sanitizes file names", async () => {
+    const { sanitizeFileName } = await import("../src/storage");
+    expect(sanitizeFileName("https://x.com/a/My Video (1).MOV?token=1")).toBe("My-Video-1.mp4");
+    expect(sanitizeFileName("clip.mp4")).toBe("clip.mp4");
+    expect(sanitizeFileName("###", "fallback")).toBe("fallback.mp4");
+  });
+
+  it("only lets MP4 data through", async () => {
+    const { requireMp4 } = await import("../src/storage");
+    const stream = (bytes: number[][]) => new ReadableStream<Uint8Array>({ start: (c) => (bytes.forEach((b) => c.enqueue(new Uint8Array(b))), c.close()) });
+    const ftyp = [0, 0, 0, 24, 102, 116, 121, 112]; // size + "ftyp"
+    const ok = await requireMp4(stream([ftyp.slice(0, 5), [...ftyp.slice(5), 1, 2, 3, 4, 5], [9, 9]]));
+    const out = new Uint8Array(await new Response(ok).arrayBuffer());
+    expect([...out]).toEqual([...ftyp, 1, 2, 3, 4, 5, 9, 9]); // nothing lost or reordered
+    await expect(requireMp4(stream([[60, 104, 116, 109, 108, 62, 60, 47, 104, 116, 109, 108, 62]]))).rejects.toBeInstanceOf(AppError);
+    await expect(requireMp4(stream([[1, 2, 3]]))).rejects.toBeInstanceOf(AppError);
+  });
+
+  it("refuses unsafe download links and missing sizes", async () => {
+    const { downloadVideo } = await import("../src/storage");
+    for (const u of ["http://example.com/a.mp4", "https://localhost/a.mp4", "https://127.0.0.1/a.mp4", "https://user:pw@example.com/a.mp4", "https://[::1]/a.mp4", "nope"]) {
+      await expect(downloadVideo(u)).rejects.toBeInstanceOf(AppError);
+    }
+    const orig = globalThis.fetch;
+    try {
+      globalThis.fetch = (async () => new Response(new Uint8Array(10), { status: 200 })) as typeof fetch;
+      await expect(downloadVideo("https://example.com/a.mp4")).rejects.toBeInstanceOf(AppError); // no Content-Length
+      globalThis.fetch = (async () => new Response("x", { status: 200, headers: { "Content-Length": String(999 * 1024 * 1024) } })) as typeof fetch;
+      await expect(downloadVideo("https://example.com/a.mp4")).rejects.toBeInstanceOf(AppError); // too big
+      globalThis.fetch = (async () => new Response("x", { status: 200, headers: { "Content-Length": "1", "Content-Type": "video/mp4" } })) as typeof fetch;
+      expect((await downloadVideo("https://example.com/a.mp4")).size).toBe(1);
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
+
+  it("signs upload links for one brand and file", async () => {
+    const { signedUploadUrl, verifyUploadSig } = await import("../src/storage");
+    const env = { ENCRYPTION_KEY: b64(new Uint8Array(32).fill(3)) } as never;
+    const u = new URL(await signedUploadUrl(env, "https://k.app", "demo", "a.mp4"));
+    expect(u.pathname).toBe("/upload/demo/a.mp4");
+    const e = u.searchParams.get("e"), s = u.searchParams.get("s");
+    expect(await verifyUploadSig(env, "demo", "a.mp4", e, s)).toBe(true);
+    expect(await verifyUploadSig(env, "other", "a.mp4", e, s)).toBe(false);
+    expect(await verifyUploadSig(env, "demo", "b.mp4", e, s)).toBe(false);
+    expect(await verifyUploadSig(env, "demo", "a.mp4", String(Date.now() - 1000), s)).toBe(false);
+  });
+});
+
+describe("signed upload link route", () => {
+  it("commits an MP4 to the brand's GitHub folder, and refuses everything else", async () => {
+    const key = b64(new Uint8Array(32).fill(4));
+    const { encryptStorageToken, signedUploadUrl } = await import("../src/storage");
+    const { handleUploadLink } = await import("../src/upload-link");
+    const tokenEnc = await encryptStorageToken({ ENCRYPTION_KEY: key } as never, "demo", "github_pat_x");
+    const row = { id: "demo", name: "Demo", media_prefixes: "[]", max_posts_per_day: 3, timezone: "UTC", default_times: "[]", owner_id: "u1", storage_repo: "me/videos", storage_branch: "main", storage_path: "demo", storage_token_enc: tokenEnc, storage_private: 0 };
+    const audits: string[][] = [];
+    const env = {
+      ENCRYPTION_KEY: key,
+      DB: {
+        prepare: (sql: string) => ({
+          bind: (...a: unknown[]) => ({
+            first: async () => (sql.includes("FROM brands") ? row : null),
+            all: async () => ({ results: [] }),
+            run: async () => (sql.includes("audit_log") ? audits.push(a.map(String)) : {}),
+          }),
+        }),
+      },
+    } as never;
+    const url = await signedUploadUrl(env, "https://k.app", "demo", "clip.mp4");
+    const mp4 = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 1, 2, 3, 4, 5, 6, 7, 8]);
+    const put = (u: string, body: BodyInit, headers: Record<string, string> = {}) => { const req = new Request(u, { method: "PUT", body, headers: { "Content-Length": String((body as Uint8Array).length), ...headers } }); return handleUploadLink(req, env, new URL(u), "en"); }
+
+    const orig = globalThis.fetch;
+    const calls: { url: string; method: string }[] = [];
+    (globalThis as Record<string, unknown>).FixedLengthStream = class {
+      constructor() {
+        return new TransformStream();
+      }
+    };
+    globalThis.fetch = (async (u: string, init?: RequestInit) => {
+      calls.push({ url: String(u), method: init?.method ?? "GET" });
+      if (init?.method === "HEAD") return new Response(null, { status: 404 });
+      if (init?.method === "PUT") {
+        const body = await new Response(init.body as ReadableStream).text();
+        expect(JSON.parse(body)).toMatchObject({ branch: "main", content: btoa(String.fromCharCode(...mp4)) });
+        return new Response("{}", { status: 201 });
+      }
+      return new Response("{}", { status: 404 });
+    }) as typeof fetch;
+    try {
+      const ok = await put(url, mp4);
+      expect(ok.status).toBe(200);
+      expect(await ok.json()).toMatchObject({ name: "clip.mp4", url: "https://raw.githubusercontent.com/me/videos/main/demo/clip.mp4" });
+      expect(calls.some((c) => c.method === "PUT" && c.url === "https://api.github.com/repos/me/videos/contents/demo/clip.mp4")).toBe(true);
+      expect(audits.some((a) => a.includes("media.upload"))).toBe(true);
+
+      // wrong signature, other file name, expired link
+      expect((await put(url.replace(/s=[^&]+/, "s=AAAA"), mp4)).status).toBe(403);
+      expect((await put(url.replace("clip.mp4", "other.mp4"), mp4)).status).toBe(403);
+      expect((await put(url.replace(/e=\d+/, "e=1"), mp4)).status).toBe(403);
+      // not an MP4
+      const html = new TextEncoder().encode("<html>not a video</html>");
+      expect((await put(url, html)).status).toBe(400);
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
+});

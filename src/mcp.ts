@@ -1,9 +1,10 @@
 import { PLATFORMS, type Actor, type Env } from "./env";
-import { cancelPost, createPost, editPost, getPostFor, listPosts, parseWhen, recentAudit, retryPost, toView, type NewPostInput } from "./db";
+import { audit, cancelPost, createPost, editPost, getPostFor, listPosts, parseWhen, recentAudit, retryPost, toView, type NewPostInput } from "./db";
 import { connectionStatus } from "./connections";
-import { getBrand, listBrands, resolveBrandId } from "./brands";
+import { getBrand, getBrandRow, listBrands, resolveBrandId } from "./brands";
 import { youtubeStats } from "./youtube-stats";
 import { youtubeInsights, youtubeVideos } from "./youtube-insights";
+import { FILE_RE, downloadVideo, requireMp4, sanitizeFileName, signedUploadUrl, storagePrefix, uploadToStorage, UPLOAD_LINK_TTL_MS, MAX_UPLOAD_MB } from "./storage";
 import { analytics, calendar, nextSlots, suggestSlots } from "./insights";
 import { AppError, localize, parseLang, type Lang } from "./i18n";
 import { APP_NAME, APP_VERSION } from "./config";
@@ -106,6 +107,37 @@ export const TOOLS = [
     annotations: { readOnlyHint: true },
   },
   {
+    name: "upload_video",
+    title: "Upload a video to the brand's GitHub folder",
+    description:
+      `Kervly downloads the video from a public https link and commits it to the brand's GitHub storage folder (the brand needs GitHub storage in the dashboard). The link must announce the file size and the file must be an MP4 of at most ${MAX_UPLOAD_MB} MB. Returns the media_url to use with schedule_post. If the video only exists on your side, use create_upload_link instead.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        brand: brandProp,
+        source_url: { type: "string", description: "Public https link to the .mp4" },
+        file_name: { type: "string", description: "File name in the repository (letters, digits, - _ .). Defaults to the name in the link; .mp4 is added." },
+      },
+      required: ["source_url"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "create_upload_link",
+    title: "Create a link to upload a video",
+    description:
+      `Returns a one-time style upload link (valid ${UPLOAD_LINK_TTL_MS / 60000} minutes) for a video you have as a file: send it with an HTTP PUT (for example curl -X PUT --data-binary @video.mp4 "<upload_url>") and Kervly commits it to the brand's GitHub storage folder. MP4 only, at most ${MAX_UPLOAD_MB} MB. The result includes the media_url to use with schedule_post once the upload has finished.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        brand: brandProp,
+        file_name: { type: "string", description: "File name in the repository (letters, digits, - _ .). .mp4 is added." },
+      },
+      required: ["file_name"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "schedule_post",
     title: "Schedule a post",
     description:
@@ -203,7 +235,7 @@ function asId(v: unknown): string {
   return v;
 }
 
-export async function callTool(env: Env, actor: Actor, name: string, args: Args, lang: Lang): Promise<unknown> {
+export async function callTool(env: Env, actor: Actor, name: string, args: Args, lang: Lang, origin = ""): Promise<unknown> {
   switch (name) {
     case "list_brands":
       return { brands: (await listBrands(env, actor)).map(({ storage, ...b }) => ({ ...b, storage: storage ? { repo: storage.repo, folder: storage.path, prefix: storage.prefix } : null })) };
@@ -242,6 +274,34 @@ export async function callTool(env: Env, actor: Actor, name: string, args: Args,
       }
       if (!created.length) throw new Error(errors.map((e) => `${e.platform}: ${e.error}`).join("; "));
       return { created, errors };
+    }
+    case "upload_video": {
+      const row = await getBrandRow(env, await resolveBrandId(env, actor, args.brand), actor);
+      if (typeof args.source_url !== "string" || !args.source_url) throw new AppError("s.source_invalid");
+      const name = sanitizeFileName(typeof args.file_name === "string" && args.file_name ? args.file_name : args.source_url);
+      const { body, size } = await downloadVideo(args.source_url);
+      const file = await uploadToStorage(env, row, name, await requireMp4(body), size, actor.email);
+      await audit(env, `mcp:${actor.email}`, "media.upload", `${row.id}/${file.name} ${(size / 1048576).toFixed(1)}MB (mcp)`, { user: actor.id, brand: row.id });
+      return { brand: row.id, ...file, path: `${row.storage_path ? row.storage_path + "/" : ""}${file.name}`, committed_to: row.storage_repo, media_url: file.url };
+    }
+    case "create_upload_link": {
+      const row = await getBrandRow(env, await resolveBrandId(env, actor, args.brand), actor);
+      const prefix = storagePrefix(row);
+      if (!prefix || !row.storage_token_enc) throw new AppError("s.not_configured");
+      const name = sanitizeFileName(String(args.file_name ?? ""));
+      if (!FILE_RE.test(name)) throw new AppError("s.file_name");
+      const url = await signedUploadUrl(env, env.PUBLIC_URL || origin, row.id, name);
+      return {
+        brand: row.id,
+        method: "PUT",
+        upload_url: url,
+        expires_in_minutes: UPLOAD_LINK_TTL_MS / 60000,
+        max_mb: MAX_UPLOAD_MB,
+        content_type: "video/mp4",
+        curl: `curl -X PUT -H "Content-Type: video/mp4" --data-binary @${name} "${url}"`,
+        media_url: prefix + name,
+        note: "media_url works with schedule_post after the upload has succeeded.",
+      };
     }
     case "get_calendar":
       return calendar(env, actor, await resolveBrandId(env, actor, args.brand), args.month as string | undefined, lang);
@@ -310,7 +370,7 @@ interface RpcRequest {
 const rpcResult = (id: RpcRequest["id"], result: unknown) => ({ jsonrpc: "2.0", id, result });
 const rpcError = (id: RpcRequest["id"], code: number, message: string) => ({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
 
-async function dispatch(env: Env, actor: Actor, req: RpcRequest, lang: Lang) {
+async function dispatch(env: Env, actor: Actor, req: RpcRequest, lang: Lang, origin: string) {
   const params = req.params ?? {};
   switch (req.method) {
     case "initialize": {
@@ -324,7 +384,7 @@ async function dispatch(env: Env, actor: Actor, req: RpcRequest, lang: Lang) {
           "Rules: (1) Call list_brands first. (2) Nothing sent over MCP is published immediately: every post goes into the brand's calendar and the scheduler (runs every 5 minutes) publishes it at publish_at. " +
           "(3) Look at get_calendar or suggest_slots before scheduling; respect each brand's daily limit and default posting times. If you omit publish_at, the next free default slot is used. " +
           "(4) Always give publish_at as ISO 8601 with a time zone, at least a minute ahead and at most 60 days out. " +
-          "(5) Check list_posts with status=error for failures, retry_post to retry, get_analytics for publishing results, get_youtube_stats for channel totals, get_youtube_videos for per-video details (description, tags, views) and get_youtube_insights for what performs best. (6) The brand parameter can be left out when the user has only one brand.",
+          "(5) To get a video into the brand's GitHub storage: upload_video (Kervly downloads it from a public https link) or create_upload_link (you PUT the file yourself), then use the returned media_url in schedule_post. (6) Check list_posts with status=error for failures, retry_post to retry, get_analytics for publishing results, get_youtube_stats for channel totals, get_youtube_videos for per-video details (description, tags, views) and get_youtube_insights for what performs best. (7) The brand parameter can be left out when the user has only one brand.",
       };
     }
     case "ping":
@@ -336,7 +396,7 @@ async function dispatch(env: Env, actor: Actor, req: RpcRequest, lang: Lang) {
       const args = (params.arguments ?? {}) as Args;
       if (typeof args !== "object" || Array.isArray(args)) throw new RpcError(-32602, "arguments must be an object");
       try {
-        const out = await callTool(env, actor, name, args, lang);
+        const out = await callTool(env, actor, name, args, lang, origin);
         return { content: [{ type: "text", text: JSON.stringify(out, null, 2) }], structuredContent: out as Record<string, unknown>, isError: false };
       } catch (e) {
         if (e instanceof RpcError) throw e;
@@ -364,7 +424,7 @@ export async function handleMcp(request: Request, env: Env, actor: Actor): Promi
   // Notifications and responses: accept without a body
   if (req.id === undefined) return new Response(null, { status: 202 });
   try {
-    return Response.json(rpcResult(req.id, await dispatch(env, actor, req, lang)));
+    return Response.json(rpcResult(req.id, await dispatch(env, actor, req, lang, new URL(request.url).origin)));
   } catch (e) {
     if (e instanceof RpcError) return Response.json(rpcError(req.id, e.code, e.message));
     console.error("mcp error", e);
