@@ -7,6 +7,7 @@ import { audit, cancelPost, createPost, editPost, getPostFor, getPostRow, listPo
 import { overview } from "./overview";
 import { analytics, calendar } from "./insights";
 import { youtubeStats } from "./youtube-stats";
+import { youtubeInsights, youtubeVideos } from "./youtube-insights";
 import { listBrandMedia } from "./library";
 import { ADAPTERS, connectionStatus, deleteConnection, saveConnection } from "./connections";
 import { BRAND_ID_RE, clearBrandStorage, createBrand, deleteBrand, getBrand, getBrandRow, isValidTimezone, listBrands, setBrandStorage, updateBrand } from "./brands";
@@ -54,6 +55,9 @@ async function handleApi(req: Request, env: Env, url: URL, auth: AuthContext, la
     }
     if (path === "/api/overview" && req.method === "GET") return json(await overview(env, actor, url.searchParams.get("brand") || "", lang));
     if (path === "/api/calendar" && req.method === "GET") return json(await calendar(env, actor, url.searchParams.get("brand") || "", url.searchParams.get("month") || undefined, lang));
+    if (path === "/api/youtube/insights" && req.method === "GET") return json(await youtubeInsights(env, actor, url.searchParams.get("brand") || "", url.searchParams.get("days"), lang));
+    if (path === "/api/youtube/videos" && req.method === "GET")
+      return json(await youtubeVideos(env, actor, url.searchParams.get("brand") || "", { limit: Number(url.searchParams.get("limit")) || undefined, sort: url.searchParams.get("sort") || undefined }));
     if (path === "/api/youtube/stats" && req.method === "GET") return json(await youtubeStats(env, actor, url.searchParams.get("brand") || ""));
     if (path === "/api/analytics" && req.method === "GET") return json(await analytics(env, actor, url.searchParams.get("brand") || "", url.searchParams.get("days"), lang));
     if (path === "/api/activity" && req.method === "GET") return json({ activity: await recentAudit(env, actor, lang, 60) });

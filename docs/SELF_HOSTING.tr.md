@@ -104,7 +104,7 @@ ekleyebilirsiniz. Kervly yalnızca markanın depolama klasöründeki veya bu ön
 1. [Google Cloud Console](https://console.cloud.google.com/)'da proje açın ve **YouTube Data API v3**'ü etkinleştirin.
 2. *Google Auth Platform* bölümünde:
    - *Audience*: *External* seçin.
-   - *Data access*: `.../auth/youtube.upload` ve `.../auth/youtube.readonly` (kanal istatistikleri) kapsamlarını ekleyin. Mevcut YouTube bağlantılarının salt okunur izni vermesi için bir kez yeniden bağlanması gerekir.
+   - *Data access*: `.../auth/youtube.upload` `.../auth/youtube.readonly` ve `.../auth/yt-analytics.readonly` (istatistikler) kapsamlarını ekleyin, *YouTube Data API v3* yanında *YouTube Analytics API*'yi de etkinleştirin. Mevcut YouTube bağlantılarının salt okunur izni vermesi için bir kez yeniden bağlanması gerekir.
    - *Test users*: kendinizi ekleyin.
    - Ardından **Publish app → In production** yapın; test modunda refresh token 7 günde biter.
 3. *Clients → Create client → Web application* oluşturun. *Authorized redirect URI*: `<URL>/connect/youtube/callback`

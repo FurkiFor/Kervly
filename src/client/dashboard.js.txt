@@ -12,7 +12,7 @@
   const PF_SHORT = { youtube: "YT", instagram: "IG", tiktok: "TT" };
   const ICON = BOOT.icons;
 
-  const S = { csrf: "", brands: [], brand: "", view: "overview", filters: { status: "", platform: "", range: "upcoming" }, errors: 0, media: {}, cal: { month: "", day: "" }, an: { days: 30 } };
+  const S = { csrf: "", brands: [], brand: "", view: "overview", filters: { status: "", platform: "", range: "upcoming" }, errors: 0, media: {}, cal: { month: "", day: "" }, an: { days: 30, tab: "publishing", ytDays: 28, sort: "recent" } };
 
   // ---------- helpers ----------
   function toast(msg, isErr) {
@@ -313,7 +313,11 @@
     const max = Math.max(1, ...rows.map((r) => r.n));
     return rows.map((r) => '<div class="hb"><div class="hb-l">' + r.label + '</div><div class="hb-t"><div class="hb-f" data-w="' + Math.round((r.n / max) * 100) + '"></div></div><div class="hb-n">' + esc(r.n) + "</div></div>").join("");
   }
+  function anTabs() {
+    return '<div class="seg"><button class="' + (S.an.tab === "publishing" ? "on" : "") + '" data-an-tab="publishing">' + esc(T.yt_tab_pub) + '</button><button class="' + (S.an.tab === "youtube" ? "on" : "") + '" data-an-tab="youtube">' + esc(T.yt_tab_yt) + "</button></div>";
+  }
   async function viewAnalytics() {
+    if (S.an.tab === "youtube") return viewYoutube();
     const a = await api("/api/analytics?brand=" + encodeURIComponent(S.brand) + "&days=" + S.an.days);
     const t = a.totals;
     const seg = [7, 30, 90].map((n) => '<button class="' + (a.days === n ? "on" : "") + '" data-an-days="' + n + '">' + esc(tr("an_range", { n })) + "</button>").join("");
@@ -334,24 +338,94 @@
       (a.top_errors.length
         ? a.top_errors.map((e) => '<div class="check"><div class="ct grow">' + pfBadge(e.platform) + " " + esc(e.message || "") + '</div><span class="tiny faint">' + esc(tr("an_times", { n: e.count })) + "</span></div>").join("")
         : empty("check", T.an_no_errors)) + "</div>";
-    let ytCard = "";
-    try {
-      const y = await api("/api/youtube/stats?brand=" + encodeURIComponent(S.brand));
-      const n = (v) => (v === null || v === undefined ? "–" : Number(v).toLocaleString(LANG));
-      const rows = y.videos.map((v) => "<tr><td>" + esc(v.title || v.video_id) + '</td><td class="small nowrap">' + esc(new Date(v.published_at).toLocaleDateString(LANG)) + "</td><td>" + n(v.views) + "</td><td>" + n(v.likes) + "</td><td>" + n(v.comments) +
-        '</td><td><a class="btn ghost sm" href="' + esc(v.url) + '" target="_blank" rel="noopener noreferrer">' + ICON.external + "</a></td></tr>").join("");
-      ytCard = '<div class="stack-sm"><div class="row"><h2>' + pfBadge("youtube") + " " + esc(T.an_yt_title) + ": " + esc(y.channel.title) + "</h2></div>" +
-        '<div class="grid g4">' + stat(T.an_yt_subs, y.channel.subscribers === null ? T.an_yt_hidden : n(y.channel.subscribers)) + stat(T.an_yt_views, n(y.channel.views)) +
-        stat(T.an_yt_videos, n(y.channel.videos)) + stat(T.an_yt_kervly, y.kervly_videos.count + " · " + n(y.kervly_videos.views)) + "</div>" +
-        (rows ? '<div class="card tight"><div class="tablewrap"><table><thead><tr><th>' + esc(T.an_yt_recent) + "</th><th>" + esc(T.th_time) + "</th><th>" + esc(T.th_views) + "</th><th>" + esc(T.th_likes) + "</th><th>" + esc(T.th_comments) + "</th><th></th></tr></thead><tbody>" + rows + "</tbody></table></div></div>" : "") + "</div>";
-    } catch (e) {
-      ytCard = '<div class="card stack-sm"><div class="row">' + pfBadge("youtube") + "<h2>" + esc(T.an_yt_title) + '</h2></div><div class="small muted">' + esc(e.message) + "</div>" +
-        '<div><a class="btn ghost sm" href="/connect/youtube?brand=' + encodeURIComponent(S.brand) + '">' + esc(T.an_yt_connect) + "</a></div></div>";
-    }
     return (
-      head(T.analytics, esc(tr("an_sub", { brand: cur().name })), '<div class="seg">' + seg + "</div>") +
-      '<div class="stack">' + stats + daily + '<div class="grid g2 align-start">' + plat + src + "</div>" + '<div class="grid g2 align-start">' + hours + errs + "</div>" + ytCard + "</div>"
+      head(T.analytics, esc(tr("an_sub", { brand: cur().name })), anTabs() + '<div class="seg">' + seg + "</div>") +
+      '<div class="stack">' + stats + daily + '<div class="grid g2 align-start">' + plat + src + "</div>" + '<div class="grid g2 align-start">' + hours + errs + "</div></div>"
     );
+  }
+
+  // ---------- analytics: YouTube ----------
+  const TRAFFIC = {
+    en: { YT_SEARCH: "YouTube search", SHORTS: "Shorts feed", SUBSCRIBER: "Subscribers", EXT_URL: "External sites", NOTIFICATION: "Notifications", RELATED_VIDEO: "Suggested videos", YT_CHANNEL: "Channel page", NO_LINK_OTHER: "Direct / unknown", YT_OTHER_PAGE: "Other YouTube pages", PLAYLIST: "Playlists", ADVERTISING: "Ads", HASHTAGS: "Hashtag pages", END_SCREEN: "End screens" },
+    tr: { YT_SEARCH: "YouTube araması", SHORTS: "Shorts akışı", SUBSCRIBER: "Aboneler", EXT_URL: "Harici siteler", NOTIFICATION: "Bildirimler", RELATED_VIDEO: "Önerilen videolar", YT_CHANNEL: "Kanal sayfası", NO_LINK_OTHER: "Doğrudan / bilinmiyor", YT_OTHER_PAGE: "Diğer YouTube sayfaları", PLAYLIST: "Oynatma listeleri", ADVERTISING: "Reklamlar", HASHTAGS: "Hashtag sayfaları", END_SCREEN: "Bitiş ekranları" },
+  };
+  const num = (v) => (v === null || v === undefined ? "–" : Number(v).toLocaleString(LANG));
+  const dur = (sec) => (sec >= 3600 ? Math.floor(sec / 3600) + ":" : "") + String(Math.floor((sec % 3600) / 60)).padStart(sec >= 3600 ? 2 : 1, "0") + ":" + String(Math.round(sec % 60)).padStart(2, "0");
+  function colBars(values, titles) {
+    const max = Math.max(1, ...values);
+    return '<div class="bars">' + values.map((v, i) => '<div class="bar" title="' + esc(titles[i]) + '"><div class="bar-p" data-h="' + Math.round((v / max) * 100) + '"></div></div>').join("") + "</div>";
+  }
+  function ytVideoItem(v) {
+    const tags = v.tags.length ? v.tags.map((t) => '<span class="chip">' + esc(t) + "</span>").join(" ") : '<span class="faint small">' + esc(T.yt_no_tags) + "</span>";
+    return '<div class="ytv"><div class="ytv-main">' +
+      (v.thumbnail ? '<img class="ytv-th" src="' + esc(v.thumbnail) + '" alt="" loading="lazy">' : '<div class="ytv-th"></div>') +
+      '<div class="grow"><div class="ttl"><a href="' + esc(v.url) + '" target="_blank" rel="noopener noreferrer">' + esc(v.title) + "</a></div>" +
+      '<div class="meta">' + esc(new Date(v.published_at).toLocaleDateString(LANG)) + " · " + esc(dur(v.duration_seconds)) + (v.is_short ? " · " + esc(T.yt_short) : "") +
+      (v.category ? " · " + esc(v.category.replace(/_/g, " ").toLowerCase()) : "") + (v.privacy !== "public" ? " · " + esc(v.privacy) : "") + (v.kervly_post ? " · Kervly" : "") + "</div>" +
+      '<div class="ytv-stats"><b>' + esc(num(v.views)) + "</b> " + esc(T.th_views.toLowerCase()) + " · " + esc(num(v.likes)) + " " + esc(T.th_likes.toLowerCase()) + " · " + esc(num(v.comments)) + " " + esc(T.th_comments.toLowerCase()) +
+      " · " + esc(v.engagement_rate) + "% · " + esc(tr("yt_per_day", { n: num(v.views_per_day) })) + "</div></div></div>" +
+      '<details class="adv"><summary>' + esc(T.yt_details) + '</summary><div class="stack-sm mt8"><div class="ytv-desc small">' + (v.description ? esc(v.description) : '<span class="faint">' + esc(T.yt_no_desc) + "</span>") +
+      '</div><div class="chips">' + tags + "</div></div></details></div>";
+  }
+  async function viewYoutube() {
+    const seg = [7, 28, 90].map((n) => '<button class="' + (S.an.ytDays === n ? "on" : "") + '" data-yt-days="' + n + '">' + esc(tr("an_range", { n })) + "</button>").join("");
+    const headHtml = (sub) => head(T.analytics, sub, anTabs() + '<div class="seg">' + seg + "</div>");
+    let d;
+    try {
+      d = await api("/api/youtube/insights?brand=" + encodeURIComponent(S.brand) + "&days=" + S.an.ytDays);
+    } catch (e) {
+      return headHtml(esc(tr("an_sub", { brand: cur().name }))) + '<div class="card stack-sm"><div class="row">' + pfBadge("youtube") + "<h2>" + esc(T.an_yt_title) + '</h2></div><div class="small muted">' + esc(e.message) +
+        '</div><div><a class="btn ghost sm" href="/connect/youtube?brand=' + encodeURIComponent(S.brand) + '">' + esc(T.an_yt_connect) + "</a></div></div>";
+    }
+    const c = d.channel, sm = d.summary, an = d.analytics, pt = d.patterns;
+    const wdNames = [0, 1, 2, 3, 4, 5, 6].map((i) => T["wd" + i]);
+    const channel = '<div class="stack-sm"><div class="row"><h2>' + pfBadge("youtube") + " " + esc(c.title) + (c.handle ? ' <span class="faint small">' + esc(c.handle) + "</span>" : "") + "</h2></div>" +
+      '<div class="grid g4">' + stat(T.an_yt_subs, c.subscribers === null ? T.an_yt_hidden : num(c.subscribers)) + stat(T.an_yt_views, num(c.views)) + stat(T.an_yt_videos, num(c.videos)) + stat(T.an_yt_kervly, sm.kervly_published) + "</div>" +
+      '<div class="grid g4">' + stat(T.yt_avg_views, num(sm.avg_views)) + stat(T.yt_median, num(sm.median_views)) + stat(T.yt_eng, sm.avg_engagement_rate + "%") + stat(T.yt_avg_dur, dur(sm.avg_duration_seconds)) + "</div>" +
+      '<div class="tiny faint">' + esc(tr("yt_sample", { n: sm.analyzed_videos })) + "</div></div>";
+
+    let analytics;
+    if (an.available) {
+      const t = an.totals;
+      const regions = new Intl.DisplayNames([LANG], { type: "region" });
+      analytics = '<div class="stack-sm"><h2>' + esc(T.an_yt_title) + " · " + esc(tr("an_range", { n: d.days })) + "</h2>" +
+        '<div class="grid g4">' + stat(T.th_views, num(t.views)) + stat(T.yt_watch, num(Math.round(t.watch_minutes / 60)) + " h") + stat(T.yt_subs_net, (t.subscribers_gained - t.subscribers_lost >= 0 ? "+" : "") + num(t.subscribers_gained - t.subscribers_lost)) + stat(T.yt_avg_view, dur(t.avg_view_seconds)) + "</div>" +
+        '<div class="card"><div class="card-head"><h2>' + esc(T.yt_daily_views) + "</h2></div>" + colBars(an.series.map((x) => x.views), an.series.map((x) => x.date + ": " + x.views)) + "</div>" +
+        '<div class="grid g2 align-start"><div class="card"><div class="card-head"><h2>' + esc(T.yt_traffic) + "</h2></div>" +
+        hbar(an.traffic_sources.slice(0, 8).map((x) => ({ label: esc((TRAFFIC[LANG] || TRAFFIC.en)[x.source] || x.source), n: x.views }))) + "</div>" +
+        '<div class="card"><div class="card-head"><h2>' + esc(T.yt_countries) + "</h2></div>" +
+        hbar(an.countries.map((x) => ({ label: esc(x.country.length === 2 ? regions.of(x.country) || x.country : x.country), n: x.views }))) + "</div></div>" +
+        (an.retention.length ? '<div class="card"><div class="card-head"><h2>' + esc(T.yt_retention) + "</h2></div>" + an.retention.map((x) =>
+          '<div class="hb"><div class="hb-l small">' + esc((x.title || x.video_id).slice(0, 40)) + '</div><div class="hb-t"><div class="hb-f" data-w="' + Math.min(100, Math.round(x.avg_view_percentage)) + '"></div></div><div class="hb-n">' + esc(x.avg_view_percentage) + "%</div></div>").join("") + "</div>" : "") + "</div>";
+    } else {
+      const msg = an.reason === "scope" ? T.an_na_scope : an.reason === "api_disabled" ? T.an_na_api : T.an_na_error;
+      analytics = '<div class="card stack-sm"><div class="row"><h2>' + esc(T.an_yt_title) + " · " + esc(T.yt_watch) + '</h2></div><div class="small muted">' + esc(msg) + "</div>" +
+        (an.reason === "scope" ? '<div><a class="btn ghost sm" href="/connect/youtube?brand=' + encodeURIComponent(S.brand) + '">' + esc(T.an_yt_connect) + "</a></div>" : "") + "</div>";
+    }
+
+    const mini = (v) => '<div class="check"><div class="ct grow"><a href="' + esc(v.url) + '" target="_blank" rel="noopener noreferrer">' + esc(v.title) + '</a></div><span class="tiny faint">' + esc(num(v.views)) + " · " + esc(v.engagement_rate) + "%</span></div>";
+    const bestWorst = '<div class="grid g2 align-start"><div class="card"><div class="card-head"><h2>' + esc(T.yt_best) + "</h2></div>" + sm.best.map(mini).join("") + "</div>" +
+      '<div class="card"><div class="card-head"><h2>' + esc(T.yt_worst) + "</h2></div>" + sm.worst.map(mini).join("") + "</div></div>";
+
+    const tagTable = (rows) => rows.length
+      ? '<div class="tablewrap"><table><thead><tr><th>' + esc(T.yt_tag_col) + "</th><th>" + esc(T.yt_vids_col) + "</th><th>" + esc(T.yt_avgv_col) + "</th></tr></thead><tbody>" +
+        rows.map((r) => "<tr><td>" + esc(r.tag) + "</td><td>" + r.videos + "</td><td>" + esc(num(r.avg_views)) + "</td></tr>").join("") + "</tbody></table></div>"
+      : '<div class="faint small">–</div>';
+    const patterns = '<div class="stack-sm"><h2>' + esc(T.yt_patterns) + "</h2>" +
+      '<div class="grid g2 align-start"><div class="card"><div class="card-head"><h2>' + esc(T.yt_weekday) + "</h2></div>" + colBars(pt.by_weekday.map((x) => x.avg_views), pt.by_weekday.map((x) => wdNames[x.weekday] + ": " + x.avg_views + " (" + x.videos + ")")) +
+      '<div class="row between tiny faint">' + wdNames.map((n) => "<span>" + esc(n) + "</span>").join("") + "</div></div>" +
+      '<div class="card"><div class="card-head"><h2>' + esc(T.yt_hour) + "</h2></div>" + '<div class="hours">' + pt.by_hour.map((x) => '<div class="hr" title="' + String(x.hour).padStart(2, "0") + ":00 · " + x.avg_views + " (" + x.videos + ')"><div class="hr-b" data-h="' + Math.round((x.avg_views / Math.max(1, ...pt.by_hour.map((y) => y.avg_views))) * 100) + '"></div><span>' + (x.hour % 6 === 0 ? x.hour : "") + "</span></div>").join("") + "</div></div></div>" +
+      '<div class="grid g2 align-start"><div class="card"><div class="card-head"><h2>' + esc(T.yt_duration) + "</h2></div>" + hbar(pt.by_duration.map((x) => ({ label: esc(x.label) + ' <span class="faint tiny">(' + x.videos + ")</span>", n: x.avg_views }))) + "</div>" +
+      '<div class="card"><div class="card-head"><h2>' + esc(T.yt_title_len) + "</h2></div>" + hbar(pt.by_title_length.map((x) => ({ label: esc(x.label) + ' <span class="faint tiny">(' + x.videos + ")</span>", n: x.avg_views }))) + "</div></div>" +
+      '<div class="grid g2 align-start"><div class="card"><div class="card-head"><h2>' + esc(T.yt_tags) + "</h2></div>" + tagTable(pt.top_tags) + "</div>" +
+      '<div class="card"><div class="card-head"><h2>' + esc(T.yt_hashtags) + "</h2></div>" + tagTable(pt.top_hashtags) + "</div></div></div>";
+
+    const sorted = d.videos.slice();
+    const key = { views: "views", likes: "likes", comments: "comments", engagement: "engagement_rate" }[S.an.sort];
+    if (key) sorted.sort((a, b) => b[key] - a[key]);
+    const sortSel = '<select class="select-inline" data-yt-sort="1">' + ["recent", "views", "likes", "comments", "engagement"].map((k) => '<option value="' + k + '"' + (S.an.sort === k ? " selected" : "") + ">" + esc(T["sort_" + k]) + "</option>").join("") + "</select>";
+    const list = '<div class="stack-sm"><div class="row between"><h2>' + esc(T.yt_videos) + "</h2>" + sortSel + '</div><div class="plist">' + sorted.map(ytVideoItem).join("") + "</div></div>";
+    return headHtml(esc(tr("an_sub", { brand: cur().name }))) + '<div class="stack">' + channel + analytics + bestWorst + patterns + list + "</div>";
   }
 
   // ---------- post dialog ----------
@@ -821,7 +895,7 @@
 
   // ---------- events ----------
   document.addEventListener("click", async (ev) => {
-    const el = ev.target.closest("[data-act],[data-copy],[data-filter],[data-time],[data-day],[data-media],[data-close],[data-cal-day],[data-cal-shift],[data-an-days]");
+    const el = ev.target.closest("[data-act],[data-copy],[data-filter],[data-time],[data-day],[data-media],[data-close],[data-cal-day],[data-cal-shift],[data-an-days],[data-an-tab],[data-yt-days]");
     if (!el) return;
     try {
       if (el.dataset.copy) {
@@ -836,6 +910,14 @@
       if (el.dataset.calShift) {
         S.cal.month = el.dataset.calShift === "today" ? "" : shiftMonth(S.cal.month, Number(el.dataset.calShift));
         S.cal.day = "";
+        return route();
+      }
+      if (el.dataset.anTab) {
+        S.an.tab = el.dataset.anTab;
+        return route();
+      }
+      if (el.dataset.ytDays) {
+        S.an.ytDays = Number(el.dataset.ytDays);
         return route();
       }
       if (el.dataset.anDays) {
@@ -910,7 +992,10 @@
   });
   document.addEventListener("change", (ev) => {
     const t = ev.target;
-    if (t.matches("[data-filter-select]")) {
+    if (t.matches("[data-yt-sort]")) {
+      S.an.sort = t.value;
+      route();
+    } else if (t.matches("[data-filter-select]")) {
       S.filters[t.dataset.filterSelect] = t.value;
       route();
     } else if (t.matches(".brand-select")) {

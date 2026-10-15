@@ -196,3 +196,13 @@ th{font-size:11.5px;color:var(--muted);font-weight:700;text-transform:uppercase;
 .hours{display:grid;grid-template-columns:repeat(24,minmax(0,1fr));gap:2px;height:130px;align-items:end}
 .hr{height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;font-size:10px;color:var(--faint)}
 .hr-b{width:100%;background:var(--accent);border-radius:3px 3px 0 0;min-height:2px;opacity:.85}
+
+/* ---- youtube insights ---- */
+.ytv{padding:14px 16px;border-top:1px solid var(--line-2)}.ytv:first-child{border-top:0}
+.ytv-main{display:flex;gap:14px;align-items:flex-start}
+.ytv-th{width:96px;height:54px;border-radius:8px;background:var(--line-2);object-fit:cover;flex:none}
+.ytv .ttl a{color:inherit;font-weight:650}.ytv .meta{color:var(--muted);font-size:12.5px;margin-top:2px;text-transform:none}
+.ytv-stats{font-size:13px;margin-top:6px}
+.ytv-desc{white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto}
+.ytv details{margin-top:10px}
+@media (max-width:860px){.ytv-th{width:72px;height:40px}}

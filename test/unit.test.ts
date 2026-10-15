@@ -373,3 +373,104 @@ describe("youtube stats", () => {
     }
   });
 });
+
+describe("youtube insights", () => {
+  it("parses ISO durations", async () => {
+    const { isoSeconds } = await import("../src/youtube-insights");
+    expect(isoSeconds("PT45S")).toBe(45);
+    expect(isoSeconds("PT1M30S")).toBe(90);
+    expect(isoSeconds("PT1H2M3S")).toBe(3723);
+    expect(isoSeconds(undefined)).toBe(0);
+  });
+
+  async function setup(scope: string) {
+    const key = b64(new Uint8Array(32).fill(6));
+    const enc = await encryptJson(key, { access_token: "tok", refresh_token: "r", expires_at: Date.now() + 3600_000, scope }, "conn:demo:youtube");
+    return {
+      ENCRYPTION_KEY: key,
+      DB: {
+        prepare: (sql: string) => ({
+          bind: () => ({
+            first: async () => (sql.includes("FROM brands") ? { id: "demo", name: "Demo", media_prefixes: "[]", max_posts_per_day: 3, timezone: "UTC", default_times: "[]", owner_id: "u1" } : { brand_id: "demo", platform: "youtube", account_id: "UC1", account_name: "Ch", enc_tokens: enc, access_expires_at: 0, updated_at: 0 }),
+            all: async () => ({ results: [{ id: "p_9", external_id: "v1" }] }),
+            run: async () => ({}),
+          }),
+        }),
+      },
+    };
+  }
+  const video = (id: string, title: string, views: string, likes: string, comments: string, dur: string, tags: string[], at: string, desc = "") => ({
+    id,
+    snippet: { title, description: desc, tags, categoryId: "27", publishedAt: at, defaultAudioLanguage: "ar" },
+    statistics: { viewCount: views, likeCount: likes, commentCount: comments },
+    contentDetails: { duration: dur },
+    status: { privacyStatus: "public" },
+  });
+  function mockYoutube(analytics: "ok" | "disabled") {
+    return (async (url: string) => {
+      const u = String(url);
+      if (u.includes("/channels")) return Response.json({ items: [{ id: "UC1", snippet: { title: "Ch", customUrl: "@ch" }, statistics: { subscriberCount: "500", viewCount: "9000", videoCount: "3" }, contentDetails: { relatedPlaylists: { uploads: "UU1" } } }] });
+      if (u.includes("/playlistItems")) return Response.json({ items: [{ contentDetails: { videoId: "v1" } }, { contentDetails: { videoId: "v2" } }, { contentDetails: { videoId: "v3" } }] });
+      if (u.includes("/videos")) {
+        return Response.json({
+          items: [
+            video("v1", "Surah Fatiha #quran", "1000", "100", "10", "PT30S", ["quran", "recitation"], "2026-10-05T09:00:00Z", "Beautiful #quran recitation #islam"), // Monday 09 UTC
+            video("v2", "Another one", "200", "10", "0", "PT45S", ["quran"], "2026-10-06T15:00:00Z"),
+            video("v3", "Long lecture about patience", "50", "1", "0", "PT10M", [], "2026-10-07T15:00:00Z"),
+          ],
+        });
+      }
+      if (u.includes("youtubeanalytics")) {
+        if (analytics === "disabled") return new Response('{"error":{"errors":[{"reason":"accessNotConfigured"}]}}', { status: 403 });
+        if (u.includes("dimensions=day")) return Response.json({ rows: [["2026-10-10", 100, 50, 3, 1, 5, 1, 2], ["2026-10-11", 300, 150, 2, 0, 9, 0, 1]] });
+        if (u.includes("insightTrafficSourceType")) return Response.json({ rows: [["SHORTS", 380, 190], ["YT_SEARCH", 20, 10]] });
+        if (u.includes("dimensions=country")) return Response.json({ rows: [["TR", 250], ["SA", 150]] });
+        return Response.json({ rows: [["v1", 300, 22.4, 74.6]] });
+      }
+      return new Response("{}", { status: 404 });
+    }) as typeof fetch;
+  }
+
+  it("computes summary, patterns and analytics", async () => {
+    const { youtubeInsights } = await import("../src/youtube-insights");
+    const orig = globalThis.fetch;
+    globalThis.fetch = mockYoutube("ok");
+    try {
+      const r = await youtubeInsights(await setup("a youtube.readonly yt-analytics.readonly") as never, { id: "u1", email: "a", role: "user" } as never, "demo", 28);
+      expect(r.summary).toMatchObject({ analyzed_videos: 3, total_views: 1250, median_views: 200, shorts: 2, kervly_published: 1 });
+      expect(r.summary.best[0]).toMatchObject({ id: "v1", views: 1000 });
+      expect(r.summary.worst[0]).toMatchObject({ id: "v3" });
+      expect(r.videos[0]).toMatchObject({ is_short: true, hashtags: ["#quran", "#islam"], category: "EDUCATION", language: "ar", engagement_rate: 11 });
+      expect(r.patterns.by_weekday[0]).toMatchObject({ videos: 1, avg_views: 1000 }); // Monday
+      expect(r.patterns.top_tags[0]).toMatchObject({ tag: "quran", videos: 2, avg_views: 600 });
+      expect(r.patterns.by_duration.find((b) => b.label === "16–30 s")).toMatchObject({ videos: 1, avg_views: 1000 });
+      expect(r.analytics).toMatchObject({ available: true });
+      if (r.analytics.available) {
+        expect(r.analytics.totals).toMatchObject({ views: 400, subscribers_gained: 5, subscribers_lost: 1, avg_view_seconds: 30 });
+        expect(r.analytics.traffic_sources[0]).toMatchObject({ source: "SHORTS", views: 380 });
+        expect(r.analytics.retention[0]).toMatchObject({ video_id: "v1", title: "Surah Fatiha #quran", avg_view_percentage: 74.6 });
+      }
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
+
+  it("degrades when Analytics is unavailable and when the permission is missing", async () => {
+    const { youtubeInsights, youtubeVideos } = await import("../src/youtube-insights");
+    const orig = globalThis.fetch;
+    globalThis.fetch = mockYoutube("disabled");
+    try {
+      const actor = { id: "u1", email: "a", role: "user" } as never;
+      const r = await youtubeInsights(await setup("a youtube.readonly yt-analytics.readonly") as never, actor, "demo", 28);
+      expect(r.analytics).toEqual({ available: false, reason: "api_disabled" });
+      const noScope = await youtubeInsights(await setup("a youtube.readonly") as never, actor, "demo", 28);
+      expect(noScope.analytics).toEqual({ available: false, reason: "scope" });
+      await expect(youtubeVideos(await setup("a youtube.upload") as never, actor, "demo")).rejects.toBeInstanceOf(AppError);
+      const list = await youtubeVideos(await setup("a youtube.readonly") as never, actor, "demo", { sort: "views", limit: 2, descriptionMax: 10 });
+      expect(list.videos.map((v) => v.id)).toEqual(["v1", "v2", "v3"]);
+      expect(list.videos[0].description.length).toBeLessThanOrEqual(10);
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
+});

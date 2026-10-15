@@ -3,6 +3,7 @@ import { cancelPost, createPost, editPost, getPostFor, listPosts, parseWhen, rec
 import { connectionStatus } from "./connections";
 import { getBrand, listBrands, resolveBrandId } from "./brands";
 import { youtubeStats } from "./youtube-stats";
+import { youtubeInsights, youtubeVideos } from "./youtube-insights";
 import { analytics, calendar, nextSlots, suggestSlots } from "./insights";
 import { AppError, localize, parseLang, type Lang } from "./i18n";
 import { APP_NAME, APP_VERSION } from "./config";
@@ -62,6 +63,34 @@ export const TOOLS = [
     description:
       "Live statistics of the brand's connected YouTube channel (subscribers, total views, video count) plus views, likes and comments of the videos Kervly published. Needs the read-only permission: if it is missing, reconnect YouTube in the dashboard Setup.",
     inputSchema: { type: "object", properties: { brand: brandProp }, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "get_youtube_videos",
+    title: "YouTube videos with details",
+    description:
+      "The channel's latest uploads with everything YouTube knows: title, full description, tags, hashtags, category, duration, whether it is a Short, privacy, language, publish time, views, likes, comments, engagement rate and views per day. Use it to study what works and to write better titles, descriptions and tags. Needs the YouTube read-only permission.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        brand: brandProp,
+        limit: { type: "integer", minimum: 1, maximum: 50, description: "How many videos (default 20)" },
+        sort: { type: "string", enum: ["recent", "views", "likes", "comments", "engagement"], description: "Default recent" },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "get_youtube_insights",
+    title: "YouTube insights",
+    description:
+      "Analysis of the brand's YouTube channel: channel totals, averages (views, likes, engagement, duration, title length, tags), best and worst videos, which weekday / hour / duration / title length / tags perform best, plus YouTube Analytics for the period (daily views, watch minutes, subscribers gained, traffic sources, top countries, average view duration per video) when that permission and API are available.",
+    inputSchema: {
+      type: "object",
+      properties: { brand: brandProp, days: { type: "integer", enum: [7, 28, 90], description: "Analytics period, default 28" } },
+      additionalProperties: false,
+    },
     annotations: { readOnlyHint: true },
   },
   {
@@ -220,6 +249,13 @@ export async function callTool(env: Env, actor: Actor, name: string, args: Args,
       return suggestSlots(env, actor, await resolveBrandId(env, actor, args.brand), args.platforms as never, Number(args.count) || 5);
     case "get_analytics":
       return analytics(env, actor, await resolveBrandId(env, actor, args.brand), args.days, lang);
+    case "get_youtube_videos":
+      return youtubeVideos(env, actor, await resolveBrandId(env, actor, args.brand), { limit: Number(args.limit) || undefined, sort: args.sort as string | undefined, descriptionMax: 2000 });
+    case "get_youtube_insights": {
+      const r = await youtubeInsights(env, actor, await resolveBrandId(env, actor, args.brand), args.days, lang);
+      // Details of single videos come from get_youtube_videos; keep this answer compact
+      return { ...r, videos: r.videos.map((v) => ({ id: v.id, title: v.title, published_at: v.published_at, duration_seconds: v.duration_seconds, views: v.views, likes: v.likes, comments: v.comments, engagement_rate: v.engagement_rate })) };
+    }
     case "get_youtube_stats":
       return youtubeStats(env, actor, await resolveBrandId(env, actor, args.brand));
     case "list_posts":
@@ -288,7 +324,7 @@ async function dispatch(env: Env, actor: Actor, req: RpcRequest, lang: Lang) {
           "Rules: (1) Call list_brands first. (2) Nothing sent over MCP is published immediately: every post goes into the brand's calendar and the scheduler (runs every 5 minutes) publishes it at publish_at. " +
           "(3) Look at get_calendar or suggest_slots before scheduling; respect each brand's daily limit and default posting times. If you omit publish_at, the next free default slot is used. " +
           "(4) Always give publish_at as ISO 8601 with a time zone, at least a minute ahead and at most 60 days out. " +
-          "(5) Check list_posts with status=error for failures, retry_post to retry, get_analytics for publishing results and get_youtube_stats for channel and video statistics. (6) The brand parameter can be left out when the user has only one brand.",
+          "(5) Check list_posts with status=error for failures, retry_post to retry, get_analytics for publishing results, get_youtube_stats for channel totals, get_youtube_videos for per-video details (description, tags, views) and get_youtube_insights for what performs best. (6) The brand parameter can be left out when the user has only one brand.",
       };
     }
     case "ping":

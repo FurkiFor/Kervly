@@ -1,10 +1,12 @@
 import { openMedia } from "../media";
 import { apiError, form, PlatformError, type PlatformAdapter } from "./types";
 
-/** Least privilege: upload videos, and read-only access for channel statistics. */
+/** Least privilege: upload videos, plus read-only access for channel statistics and analytics. */
 export const SCOPE_UPLOAD = "https://www.googleapis.com/auth/youtube.upload";
 export const SCOPE_READ = "https://www.googleapis.com/auth/youtube.readonly";
-const SCOPE = `${SCOPE_UPLOAD} ${SCOPE_READ}`;
+/** Watch time, traffic sources, countries (YouTube Analytics API). */
+export const SCOPE_ANALYTICS = "https://www.googleapis.com/auth/yt-analytics.readonly";
+const SCOPE = `${SCOPE_UPLOAD} ${SCOPE_READ} ${SCOPE_ANALYTICS}`;
 
 export const CATEGORY_IDS: Record<string, string> = {
   FILM_ANIMATION: "1",

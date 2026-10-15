@@ -11,7 +11,7 @@ export function securityHeaders(nonce: string, extraFormAction = ""): Record<str
       "default-src 'none'",
       `script-src 'nonce-${nonce}'`,
       `style-src 'nonce-${nonce}'`,
-      "img-src 'self' data:",
+      "img-src 'self' data: https://i.ytimg.com",
       "connect-src 'self'",
       `form-action 'self'${extraFormAction ? " " + extraFormAction : ""}`,
       "frame-ancestors 'none'",

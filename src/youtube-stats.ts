@@ -18,8 +18,8 @@ interface VideoItem {
 
 const num = (v: string | undefined) => (v === undefined ? null : Number(v));
 
-async function yt<T>(token: string, path: string): Promise<T> {
-  const r = await fetch(`https://www.googleapis.com/youtube/v3/${path}`, { headers: { Authorization: `Bearer ${token}` } });
+export async function yt<T>(token: string, path: string, base = "https://www.googleapis.com/youtube/v3/"): Promise<T> {
+  const r = await fetch(`${base}${path}`, { headers: { Authorization: `Bearer ${token}` } });
   if (r.status === 401 || r.status === 403) {
     const body = await r.clone().text();
     if (/insufficient|ACCESS_TOKEN_SCOPE_INSUFFICIENT|forbidden/i.test(body)) throw new AppError("yt.stats_scope");
