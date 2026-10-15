@@ -16,6 +16,7 @@ export interface BrandRow {
   storage_path: string | null;
   storage_token_enc: string | null;
   storage_private: number;
+  storage_inherited: number;
   created_at: number;
   updated_at: number;
   owner_email?: string | null;
@@ -34,7 +35,7 @@ export interface Brand {
   default_times: string[];
   owner_id: string | null;
   owner_email?: string | null;
-  storage: { repo: string; branch: string; path: string; private: boolean; has_token: boolean; prefix: string } | null;
+  storage: { repo: string; branch: string; path: string; private: boolean; has_token: boolean; prefix: string; inherited: boolean } | null;
 }
 
 export const BRAND_ID_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
@@ -60,6 +61,7 @@ export function toBrand(r: BrandRow): Brand {
           private: Boolean(r.storage_private),
           has_token: Boolean(r.storage_token_enc),
           prefix: sp!,
+          inherited: Boolean(r.storage_inherited),
         }
       : null,
   };
@@ -193,7 +195,7 @@ export async function setBrandStorage(env: Env, actor: Actor, id: string, input:
   }
   const v = await verifyStorage(s, token);
   await env.DB.prepare(
-    "UPDATE brands SET storage_repo = ?, storage_branch = ?, storage_path = ?, storage_token_enc = ?, storage_private = ?, updated_at = ? WHERE id = ?",
+    "UPDATE brands SET storage_repo = ?, storage_branch = ?, storage_path = ?, storage_token_enc = ?, storage_private = ?, storage_inherited = 0, updated_at = ? WHERE id = ?",
   )
     .bind(s.repo, s.branch, s.path, tokenEnc, v.private ? 1 : 0, Date.now(), id)
     .run();
@@ -203,7 +205,7 @@ export async function setBrandStorage(env: Env, actor: Actor, id: string, input:
 export async function clearBrandStorage(env: Env, actor: Actor, id: string): Promise<Brand> {
   await getBrandRow(env, id, actor);
   await env.DB.prepare(
-    "UPDATE brands SET storage_repo = NULL, storage_branch = NULL, storage_path = NULL, storage_token_enc = NULL, storage_private = 0, updated_at = ? WHERE id = ?",
+    "UPDATE brands SET storage_repo = NULL, storage_branch = NULL, storage_path = NULL, storage_token_enc = NULL, storage_private = 0, storage_inherited = 0, updated_at = ? WHERE id = ?",
   )
     .bind(Date.now(), id)
     .run();

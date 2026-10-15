@@ -69,6 +69,19 @@ check("second brand", r.status === 200);
 // 6) Create posts (dashboard)
 const media = "https://raw.githubusercontent.com/example/videos/main/clips/demo.mp4";
 {
+  let a = await (await fetch(`${BASE}/api/account/storage`, { headers: { cookie } })).json();
+  check("account storage starts empty", a.storage === null, JSON.stringify(a));
+  r = await fetch(`${BASE}/api/account/storage`, { method: "POST", headers: H, body: JSON.stringify({ repo: "not a repo", token: "x" }) });
+  check("account storage rejects a bad repo", r.status === 400);
+  r = await fetch(`${BASE}/api/account/storage`, { method: "POST", headers: H, body: JSON.stringify({ repo: "owner/name" }) });
+  check("account storage needs a token the first time", r.status === 400);
+  r = await fetch(`${BASE}/api/brands`, { method: "POST", headers: H, body: JSON.stringify({ id: "nostore", name: "No store" }) });
+  const nb = await r.json();
+  check("brand without account storage gets no folder", r.status === 200 && nb.folder === null && nb.storage === null, JSON.stringify(nb).slice(0, 200));
+  await fetch(`${BASE}/api/brands/nostore/delete`, { method: "POST", headers: H });
+}
+
+{
   const c = await (await fetch(`${BASE}/api/calendar?brand=demo`, { headers: { cookie } })).json();
   check("dashboard calendar API", /^\d{4}-\d{2}$/.test(c.month ?? "") && c.days?.length >= 28 && c.max_posts_per_day === 5, JSON.stringify(c).slice(0, 200));
   const a = await (await fetch(`${BASE}/api/analytics?brand=demo&days=90`, { headers: { cookie } })).json();

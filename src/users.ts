@@ -16,6 +16,11 @@ export interface UserRow {
   session_version: number;
   created_at: number;
   last_login_at: number | null;
+  storage_repo: string | null;
+  storage_branch: string | null;
+  storage_path: string | null;
+  storage_token_enc: string | null;
+  storage_private: number;
 }
 
 export const EMAIL_RE = /^[^\s@<>()"',;:]{1,64}@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;

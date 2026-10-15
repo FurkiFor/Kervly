@@ -9,7 +9,7 @@ import { analytics, calendar } from "./insights";
 import { listBrandMedia } from "./library";
 import { ADAPTERS, connectionStatus, deleteConnection, saveConnection } from "./connections";
 import { BRAND_ID_RE, clearBrandStorage, createBrand, deleteBrand, getBrand, getBrandRow, isValidTimezone, listBrands, setBrandStorage, updateBrand } from "./brands";
-import { MAX_UPLOAD_MB, openStoredMedia, uploadToStorage, verifyMediaSig } from "./storage";
+import { MAX_UPLOAD_MB, clearAccountStorage, linkBrand, openStoredMedia, setAccountStorage, toAccountStorage, uploadToStorage, verifyMediaSig } from "./storage";
 import { b64url, base32Encode, randomBytes, randomToken, sha256, sha256Hex, verifyTotp } from "./crypto";
 import { AppError, format, langFromRequest, localize, parseLang, type Lang } from "./i18n";
 import { emailConfigured } from "./email";
@@ -57,6 +57,20 @@ async function handleApi(req: Request, env: Env, url: URL, auth: AuthContext, la
     if (path === "/api/activity" && req.method === "GET") return json({ activity: await recentAudit(env, actor, lang, 60) });
 
     // ---- Account ----
+    if (path === "/api/account/storage" && req.method === "GET") {
+      const me = await getUser(env, actor.id);
+      return json({ storage: me ? toAccountStorage(me) : null });
+    }
+    if (path === "/api/account/storage" && req.method === "POST") {
+      const r = await setAccountStorage(env, actor, await readJson(req));
+      await audit(env, `ui:${actor.email}`, "account.storage_set", `${r.storage.repo}/${r.storage.path} brands=${r.linked}`, { user: actor.id });
+      return json(r);
+    }
+    if (path === "/api/account/storage/delete" && req.method === "POST") {
+      await clearAccountStorage(env, actor);
+      await audit(env, `ui:${actor.email}`, "account.storage_removed", "", { user: actor.id });
+      return json({ ok: true });
+    }
     if (path === "/api/account/password" && req.method === "POST") {
       const b = await readJson(req);
       await changePassword(env, actor, String(b.current || ""), String(b.next || ""));
@@ -114,9 +128,17 @@ async function handleApi(req: Request, env: Env, url: URL, auth: AuthContext, la
       return json({ brands: await listBrands(env, actor), hosts: env.MEDIA_ALLOWED_HOSTS, max_upload_mb: MAX_UPLOAD_MB });
     }
     if (path === "/api/brands" && req.method === "POST") {
-      const b = await createBrand(env, actor, await readJson(req));
+      let b = await createBrand(env, actor, await readJson(req));
       await audit(env, `ui:${actor.email}`, "brand.create", b.id, { user: actor.id, brand: b.id });
-      return json(b);
+      // The account's GitHub storage is shared: the new brand gets its own folder in it
+      const me = await getUser(env, actor.id);
+      let folder: "created" | "failed" | null = null;
+      if (me?.storage_repo && me.storage_token_enc) {
+        folder = (await linkBrand(env, me, b.id)) ? "created" : "failed";
+        b = await getBrand(env, b.id, actor);
+        await audit(env, `ui:${actor.email}`, "brand.storage_linked", `${b.id} ${b.storage?.repo ?? ""}/${b.storage?.path ?? ""} folder=${folder}`, { user: actor.id, brand: b.id });
+      }
+      return json({ ...b, folder });
     }
     const sm = /^\/api\/brands\/([a-z0-9-]{2,32})\/storage(\/delete)?$/.exec(path);
     if (sm && req.method === "POST") {

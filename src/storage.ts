@@ -2,6 +2,7 @@ import type { Env } from "./env";
 import { b64, b64url, decryptJson, encryptJson, timingSafeEqualStr, unb64 } from "./crypto";
 import { AppError } from "./i18n";
 import type { BrandRow } from "./brands";
+import type { UserRow } from "./users";
 
 /**
  * Brand storage = a folder in a GitHub repository. Kervly uploads videos there (streamed, never
@@ -204,4 +205,92 @@ export async function verifyMediaSig(env: Env, postId: string, exp: string | nul
   const e = Number(exp);
   if (!sig || !Number.isFinite(e) || e < Date.now() || e > Date.now() + 2 * 3600_000) return false;
   return timingSafeEqualStr(await mediaSig(env, postId, e), sig);
+}
+
+// ---------------- account storage: one repository + token per user, one folder per brand ----------------
+const userAad = (userId: string) => `storage-user:${userId}`;
+
+export interface AccountStorage {
+  repo: string;
+  branch: string;
+  /** Optional base folder; every brand gets <base>/<brand id>/. */
+  path: string;
+  private: boolean;
+  has_token: boolean;
+}
+
+export function toAccountStorage(u: Pick<UserRow, "storage_repo" | "storage_branch" | "storage_path" | "storage_token_enc" | "storage_private">): AccountStorage | null {
+  if (!u.storage_repo) return null;
+  return {
+    repo: u.storage_repo,
+    branch: u.storage_branch || "main",
+    path: u.storage_path || "",
+    private: Boolean(u.storage_private),
+    has_token: Boolean(u.storage_token_enc),
+  };
+}
+
+/** Folder of a brand inside the account storage. */
+export const brandFolder = (base: string | null | undefined, brandId: string) => (base ? `${base}/${brandId}` : brandId);
+
+async function accountToken(env: Env, u: Pick<UserRow, "id" | "storage_token_enc">): Promise<string | null> {
+  if (!u.storage_token_enc || !env.ENCRYPTION_KEY) return null;
+  return decryptJson<string>(env.ENCRYPTION_KEY, u.storage_token_enc, userAad(u.id));
+}
+
+/** Git has no empty folders: a small placeholder file makes the brand's folder appear in the repository. */
+async function ensureFolder(token: string, repo: string, branch: string, folder: string): Promise<boolean> {
+  const url = `${GH}/repos/${repo}/contents/${encPath(`${folder}/.gitkeep`)}`;
+  const r = await fetch(url, {
+    method: "PUT",
+    headers: { ...ghHeaders(token), "Content-Type": "application/json" },
+    body: JSON.stringify({ message: `Create ${folder}/ (via Kervly)`, branch, content: "S2Vydmx5Cg==" }),
+  });
+  return r.status === 201 || r.status === 200 || r.status === 422; // 422: the file is already there
+}
+
+/** Points one brand at its own folder in the account storage. Returns whether the folder exists in the repository. */
+export async function linkBrand(env: Env, u: UserRow, brandId: string, token?: string): Promise<boolean> {
+  const tok = token ?? (await accountToken(env, u));
+  if (!u.storage_repo || !tok) return false;
+  const folder = brandFolder(u.storage_path, brandId);
+  await env.DB.prepare(
+    "UPDATE brands SET storage_repo = ?, storage_branch = ?, storage_path = ?, storage_token_enc = ?, storage_private = ?, storage_inherited = 1, updated_at = ? WHERE id = ?",
+  )
+    .bind(u.storage_repo, u.storage_branch || "main", folder, await encryptStorageToken(env, brandId, tok), u.storage_private, Date.now(), brandId)
+    .run();
+  try {
+    return await ensureFolder(tok, u.storage_repo, u.storage_branch || "main", folder);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Saves the account's GitHub storage (verified, token encrypted) and applies it to every brand that has no storage of its
+ * own. Leaving the token empty keeps the current one when the repository is unchanged.
+ */
+export async function setAccountStorage(env: Env, actor: { id: string }, input: Record<string, unknown>): Promise<{ storage: AccountStorage; linked: number; folders: number }> {
+  const u = (await env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(actor.id).first<UserRow>())!;
+  const s = parseStorageInput({ ...input, path: input.path ?? "" });
+  let token = s.token;
+  if (!token) {
+    if (!u.storage_token_enc || u.storage_repo !== s.repo) throw new AppError("s.token_required");
+    token = (await accountToken(env, u)) ?? undefined;
+    if (!token) throw new AppError("s.token_required");
+  }
+  const v = await verifyStorage(s, token);
+  const tokenEnc = await encryptJson(env.ENCRYPTION_KEY!, token, userAad(u.id));
+  await env.DB.prepare("UPDATE users SET storage_repo = ?, storage_branch = ?, storage_path = ?, storage_token_enc = ?, storage_private = ? WHERE id = ?")
+    .bind(s.repo, s.branch, s.path, tokenEnc, v.private ? 1 : 0, u.id)
+    .run();
+  const fresh = (await env.DB.prepare("SELECT * FROM users WHERE id = ?").bind(u.id).first<UserRow>())!;
+  const { results } = await env.DB.prepare("SELECT id FROM brands WHERE owner_id = ? AND (storage_repo IS NULL OR storage_inherited = 1)").bind(u.id).all<{ id: string }>();
+  let folders = 0;
+  for (const b of results) if (await linkBrand(env, fresh, b.id, token)) folders++;
+  return { storage: toAccountStorage(fresh)!, linked: results.length, folders };
+}
+
+export async function clearAccountStorage(env: Env, actor: { id: string }): Promise<void> {
+  await env.DB.prepare("UPDATE users SET storage_repo = NULL, storage_branch = NULL, storage_path = NULL, storage_token_enc = NULL, storage_private = 0 WHERE id = ?").bind(actor.id).run();
 }

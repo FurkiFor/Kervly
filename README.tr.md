@@ -44,7 +44,7 @@
 | | |
 |---|---|
 | **Markalar** | Her markanın kendi YouTube, Instagram ve TikTok hesapları, depolaması, günlük limiti, saat dilimi ve varsayılan paylaşım saatleri vardır. |
-| **GitHub depolama** | Markaya bir depo + ince ayarlı token verin. Videoları panelden yükleyin (doğrudan bir commit'e akışla, 50 MB'a kadar) ya da depodaki dosyaları seçin. Gizli depolar kısa ömürlü imzalı bağlantılarla desteklenir. |
+| **GitHub depolama** | Hesap sayfasında repo + ince ayarlı token'ı bir kez ekleyin: oluşturduğunuz her marka bu repoda kendi klasörünü (`<ana klasör>/<marka kimliği>/`) otomatik alır. İsterseniz bir marka kendi ayrı reposunu da kullanabilir. Videoları panelden yükleyin (doğrudan bir commit'e akışla, 50 MB'a kadar) ya da depodaki dosyaları seçin. Gizli depolar kısa ömürlü imzalı bağlantılarla desteklenir. |
 | **Hesaplar** | Doğrulamalı e-posta kaydı, parola sıfırlama, isteğe bağlı TOTP 2FA ve üç kayıt modu: `closed`, `approval` (bekleme listesi), `open`. |
 | **Süper yönetici** | Tüm kullanıcıları ve markaları görür, hesapları onaylar veya devre dışı bırakır, kendi markalarını herkes gibi yönetir. |
 | **Panel** | Kurulum listesiyle genel bakış; düzenle / kopyala / iptal / yeniden dene; yükleme ilerlemeli video seçici; etkinlik kaydı. Açık & koyu tema, mobil görünüm, Türkçe & İngilizce. |

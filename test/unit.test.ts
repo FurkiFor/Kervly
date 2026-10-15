@@ -202,3 +202,75 @@ describe("totp clock tolerance", () => {
     expect(await verifyTotp(secret, await totpAt(secret, counter + 3), now)).toBeNull();
   });
 });
+
+describe("account storage", () => {
+  const key = b64(new Uint8Array(32).fill(9));
+  function fakeEnv() {
+    const users: Record<string, Record<string, unknown>> = { u_1: { id: "u_1", email: "a@b.c", storage_repo: null, storage_branch: null, storage_path: null, storage_token_enc: null, storage_private: 0 } };
+    const brands: Record<string, Record<string, unknown>> = {
+      alpha: { id: "alpha", owner_id: "u_1", storage_repo: null, storage_inherited: 0 },
+      custom: { id: "custom", owner_id: "u_1", storage_repo: "me/own", storage_inherited: 0 },
+    };
+    const env = {
+      ENCRYPTION_KEY: key,
+      DB: {
+        prepare(sql: string) {
+          return {
+            bind: (...a: unknown[]) => ({
+              first: async () => (sql.startsWith("SELECT * FROM users") ? users[a[0] as string] : null),
+              all: async () => ({ results: Object.values(brands).filter((b) => b.owner_id === a[0] && (!b.storage_repo || b.storage_inherited === 1)).map((b) => ({ id: b.id })) }),
+              run: async () => {
+                if (sql.startsWith("UPDATE users SET storage_repo = ?, storage_branch")) {
+                  Object.assign(users[a[5] as string], { storage_repo: a[0], storage_branch: a[1], storage_path: a[2], storage_token_enc: a[3], storage_private: a[4] });
+                } else if (sql.startsWith("UPDATE brands SET storage_repo = ?")) {
+                  Object.assign(brands[a[6] as string], { storage_repo: a[0], storage_branch: a[1], storage_path: a[2], storage_token_enc: a[3], storage_private: a[4], storage_inherited: 1 });
+                }
+              },
+            }),
+          };
+        },
+      },
+    };
+    return { env: env as never, users, brands };
+  }
+
+  it("saves one token and gives every brand without its own storage a folder", async () => {
+    const { env, users, brands } = fakeEnv();
+    const puts: string[] = [];
+    const orig = globalThis.fetch;
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        puts.push(String(url));
+        return new Response("{}", { status: 201 });
+      }
+      return Response.json({ private: true, permissions: { push: true } });
+    }) as typeof fetch;
+    try {
+      const { setAccountStorage } = await import("../src/storage");
+      const r = await setAccountStorage(env, { id: "u_1" }, { repo: "https://github.com/me/videos", token: "github_pat_abc", path: "clips" });
+      expect(r.storage).toMatchObject({ repo: "me/videos", branch: "main", path: "clips", private: true, has_token: true });
+      expect(r.linked).toBe(1);
+      expect(r.folders).toBe(1);
+      expect(brands.alpha).toMatchObject({ storage_repo: "me/videos", storage_path: "clips/alpha", storage_inherited: 1, storage_private: 1 });
+      expect(brands.custom.storage_repo).toBe("me/own"); // a brand with its own storage is left alone
+      expect(puts).toEqual(["https://api.github.com/repos/me/videos/contents/clips/alpha/.gitkeep"]);
+      // the token is stored encrypted, bound to the user, and re-encrypted for the brand
+      expect(String(users.u_1.storage_token_enc)).not.toContain("github_pat_abc");
+      expect(await decryptJson<string>(key, String(users.u_1.storage_token_enc), "storage-user:u_1")).toBe("github_pat_abc");
+      expect(await decryptJson<string>(key, String(brands.alpha.storage_token_enc), "storage:alpha")).toBe("github_pat_abc");
+      // keeping the token: leaving it empty reuses the saved one
+      const again = await setAccountStorage(env, { id: "u_1" }, { repo: "me/videos", path: "clips" });
+      expect(again.storage.repo).toBe("me/videos");
+      // a different repository needs a new token
+      await expect(setAccountStorage(env, { id: "u_1" }, { repo: "me/other" })).rejects.toBeInstanceOf(AppError);
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
+
+  it("names brand folders under an optional base", async () => {
+    const { brandFolder } = await import("../src/storage");
+    expect(brandFolder("", "alpha")).toBe("alpha");
+    expect(brandFolder("clips", "alpha")).toBe("clips/alpha");
+  });
+});

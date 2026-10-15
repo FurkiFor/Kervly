@@ -495,7 +495,17 @@
           ? '<form id="tfa-off" class="row"><input name="password" type="password" placeholder="' + esc(T.current_password) + '" class="grow" required><button class="btn danger">' + esc(T.twofa_disable) + "</button></form>"
           : '<button class="btn" data-act="tfa-start">' + ICON.lock + esc(T.twofa_enable) + "</button>") +
         "</div></div>";
-    return head(T.account, esc(T.account_sub)) + '<div class="stack"><div class="card stack-sm"><div class="row"><h2>' + esc(u.email) + "</h2>" + (u.role === "superadmin" ? '<span class="badge info right">' + esc(T.superadmin) + "</span>" : "") + "</div>" + pw + "</div>" + tfa +
+    const acct = (await api("/api/account/storage")).storage;
+    S.acct = acct;
+    const gh = '<div class="card stack-sm"><div class="row"><h2>' + esc(T.acct_storage) + "</h2></div>" +
+      '<div class="small muted">' + esc(T.acct_storage_hint) + "</div>" +
+      '<div class="storage-box' + (acct ? " on" : "") + '">' + ICON.github + '<div class="grow">' +
+      (acct
+        ? '<div class="small"><b>' + esc(acct.repo) + "</b> · " + esc(acct.branch) + '</div><div class="tiny faint">' +
+          esc(tr("acct_storage_rule", { pattern: acct.repo + "/" + (acct.path ? acct.path + "/" : "") + "<" + T.b_id + ">/" })) + " · " + (acct.private ? esc(T.storage_private) : esc(T.storage_public)) + "</div>"
+        : '<div class="small muted">' + esc(T.acct_storage_none) + "</div>") +
+      '</div><button class="btn ghost sm" data-act="acct-storage">' + esc(acct ? T.edit : T.acct_storage_set) + "</button></div></div>";
+    return head(T.account, esc(T.account_sub)) + '<div class="stack"><div class="card stack-sm"><div class="row"><h2>' + esc(u.email) + "</h2>" + (u.role === "superadmin" ? '<span class="badge info right">' + esc(T.superadmin) + "</span>" : "") + "</div>" + pw + "</div>" + gh + tfa +
       (u.role === "superadmin" ? '<a class="btn ghost" href="#/admin">' + ICON.shield + esc(T.nav_admin) + "</a>" : "") + "</div>";
   }
   document.addEventListener("submit", async (ev) => {
@@ -618,7 +628,7 @@
     return (
       '<div class="storage-box' + (st ? " on" : "") + '">' + ICON.github +
       '<div class="grow">' + (st
-        ? '<div class="small"><b>' + esc(st.repo) + "</b> · " + esc(st.branch) + (st.path ? " · /" + esc(st.path) : "") + '</div><div class="tiny faint">' + (st.private ? ICON.lock + " " + esc(T.storage_private) : esc(T.storage_public)) + "</div>"
+        ? '<div class="small"><b>' + esc(st.repo) + "</b> · " + esc(st.branch) + (st.path ? " · /" + esc(st.path) : "") + '</div><div class="tiny faint">' + (st.private ? ICON.lock + " " + esc(T.storage_private) : esc(T.storage_public)) + (st.inherited ? " · " + esc(T.storage_from_account) : "") + "</div>"
         : '<div class="small muted">' + esc(T.storage_none) + "</div>") +
       '</div><button class="btn ghost sm" data-act="storage" data-id="' + esc(b.id) + '">' + esc(st ? T.edit : T.storage_set) + "</button></div>"
     );
@@ -626,14 +636,23 @@
   function openStorageDialog(b) {
     const f = $("#storage-form");
     f.reset();
-    f.dataset.id = b.id;
-    const st = b.storage;
+    const account = !b;
+    f.dataset.id = account ? "" : b.id;
+    const st = account ? S.acct : b.storage;
+    $("#storage-ht").textContent = account ? T.acct_storage : T.storage_title;
+    $("#storage-intro").textContent = account ? T.storage_intro_account : T.storage_intro;
+    $("#s-path-l").textContent = account ? T.s_path_account : T.s_path;
+    $("#s-path-hint").classList.toggle("hidden", !account);
     f.repo.value = st ? st.repo : "";
     f.branch.value = st ? st.branch : "main";
-    f.path.value = st ? st.path : "videos";
+    f.path.value = st ? st.path : account ? "" : "videos";
     $("#s-token-hint").textContent = st && st.has_token ? T.s_token_keep : T.s_token_hint;
     $("#storage-del").classList.toggle("hidden", !st);
     openDialog("dlg-storage");
+  }
+  async function loadBrandsCount() {
+    await loadBrands(S.brand);
+    return S.brands.filter((x) => x.storage && x.storage.inherited).length;
   }
   async function submitStorage(ev) {
     ev.preventDefault();
@@ -641,9 +660,16 @@
     const btn = $("#storage-save");
     btn.disabled = true;
     try {
-      const b = await post("/api/brands/" + encodeURIComponent(f.dataset.id) + "/storage", { repo: f.repo.value, branch: f.branch.value, path: f.path.value, token: f.token.value });
+      const body = { repo: f.repo.value, branch: f.branch.value, path: f.path.value, token: f.token.value };
+      let b = { id: "" };
+      if (f.dataset.id) b = await post("/api/brands/" + encodeURIComponent(f.dataset.id) + "/storage", body);
+      else {
+        const r = await post("/api/account/storage", body);
+        S.acct = r.storage;
+        S.media = {};
+      }
       f.token.value = "";
-      toast(T.storage_saved);
+      toast(f.dataset.id ? T.storage_saved : tr("storage_applied", { n: S.acct ? (await loadBrandsCount()) : 0 }));
       $("#dlg-storage").close();
       delete S.media[b.id];
       await loadBrands(S.brand);
@@ -671,6 +697,15 @@
     f.tz.innerHTML = zones.map((z) => '<option value="' + esc(z) + '"' + (z === sel ? " selected" : "") + ">" + esc(z.replace(/_/g, " ")) + "</option>").join("");
     $("#hosts").textContent = S.hosts;
     $("#brand-del").classList.toggle("hidden", !b);
+    const note = $("#brand-storage-note");
+    note.classList.add("hidden");
+    if (!b) {
+      api("/api/account/storage").then(({ storage }) => {
+        S.acct = storage;
+        note.textContent = storage ? tr("brand_storage_auto", { repo: storage.repo }) : T.brand_storage_missing;
+        note.classList.remove("hidden");
+      }).catch(() => {});
+    }
     openDialog("dlg-brand");
   }
   async function submitBrand(ev) {
@@ -688,7 +723,7 @@
         f.dataset.mode === "edit"
           ? await post("/api/brands/" + encodeURIComponent(f.bid.value), body)
           : await post("/api/brands", { id: f.bid.value.trim(), ...body });
-      toast(T.brand_saved);
+      toast(b.folder === "created" ? tr("brand_folder_created", { folder: b.storage.path }) : b.folder === "failed" ? T.brand_folder_failed : T.brand_saved, b.folder === "failed");
       $("#dlg-brand").close();
       delete S.media[b.id];
       await loadBrands(b.id);
@@ -825,6 +860,8 @@
           return openBrandDialog(null);
         case "storage":
           return openStorageDialog(S.brands.find((b) => b.id === id));
+        case "acct-storage":
+          return openStorageDialog(null);
         case "tfa-start":
           return startTfa();
         case "user":
@@ -877,7 +914,7 @@
     const id = $("#storage-form").dataset.id;
     if (!(await confirmBox(T.remove + "?", T.remove, true))) return;
     try {
-      await post("/api/brands/" + encodeURIComponent(id) + "/storage/delete");
+      await post(id ? "/api/brands/" + encodeURIComponent(id) + "/storage/delete" : "/api/account/storage/delete");
       $("#dlg-storage").close();
       await loadBrands(S.brand);
       route();

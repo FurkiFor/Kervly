@@ -44,7 +44,7 @@ Paid schedulers cap your posts per month and keep your content in their cloud. K
 | | |
 |---|---|
 | **Brands** | Each brand has its own YouTube, Instagram and TikTok accounts, storage, daily limit, time zone and default posting times. |
-| **GitHub storage** | Give a brand a repository + fine-grained token. Upload videos from the dashboard (streamed straight into a commit, up to 50 MB) or pick files already in the repo. Private repositories are supported via short-lived signed links. |
+| **GitHub storage** | Add your repository + fine-grained token once under Account: every brand you create gets its own folder in it (`<base>/<brand id>/`, created automatically). A brand can still use a different repository of its own. Upload videos from the dashboard (streamed straight into a commit, up to 50 MB) or pick files already in the repo. Private repositories are supported via short-lived signed links. |
 | **Accounts** | Email sign-up with verification, password reset, optional TOTP 2FA, and three registration modes: `closed`, `approval` (waitlist) and `open`. |
 | **Superadmin** | Sees every user and brand, approves or disables accounts, and manages their own brands like anyone else. |
 | **Dashboard** | Overview with setup checklist, post list with edit / duplicate / cancel / retry, video picker with upload progress, activity log. Light & dark mode, mobile layout, English & Turkish. |

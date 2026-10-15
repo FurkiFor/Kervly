@@ -52,6 +52,20 @@ const UI = {
     s_verify_save: "Verify & save",
     storage: "Storage",
     storage_none: "No storage yet",
+    acct_storage: "GitHub storage",
+    acct_storage_hint: "Add your GitHub repository and token once. Every brand you create gets its own folder in it automatically.",
+    acct_storage_none: "Not set up yet",
+    acct_storage_rule: "Each brand uses its own folder: {pattern}",
+    acct_storage_set: "Set up",
+    s_path_account: "Base folder (optional)",
+    s_path_account_hint: "Leave empty to create the brand folders at the top of the repository.",
+    storage_intro_account: "Kervly stores every brand's videos in this repository, one folder per brand, named after the brand id. Uploads are committed there and published from there. Private repositories work too.",
+    storage_applied: "Saved. {n} brand(s) now use their own folder in this repository.",
+    brand_folder_created: "Brand saved. Its folder {folder}/ was created in your GitHub repository.",
+    brand_folder_failed: "Brand saved, but its folder could not be created in GitHub. Check the token in Account.",
+    brand_storage_auto: "Videos will be stored in your GitHub repository {repo}, in a folder named after this brand.",
+    brand_storage_missing: "No GitHub storage in your account yet. Set it up in Account and every brand gets its own folder automatically.",
+    storage_from_account: "From your account",
     storage_set: "Configure storage",
     storage_private: "private",
     storage_public: "public",
@@ -359,6 +373,20 @@ const UI = {
     s_verify_save: "Doğrula ve kaydet",
     storage: "Depo",
     storage_none: "Henüz depo yok",
+    acct_storage: "GitHub deposu",
+    acct_storage_hint: "GitHub reposunu ve token'ını bir kez ekle. Oluşturduğun her marka, bu repoda otomatik olarak kendi klasörünü alır.",
+    acct_storage_none: "Henüz ayarlanmadı",
+    acct_storage_rule: "Her marka kendi klasörünü kullanır: {pattern}",
+    acct_storage_set: "Ayarla",
+    s_path_account: "Ana klasör (isteğe bağlı)",
+    s_path_account_hint: "Boş bırakırsan marka klasörleri reponun en üstünde oluşturulur.",
+    storage_intro_account: "Kervly her markanın videolarını bu repoda, marka kimliğiyle adlandırılmış ayrı bir klasörde tutar. Yüklemeler oraya commit'lenir ve yayın oradan yapılır. Gizli repolar da çalışır.",
+    storage_applied: "Kaydedildi. {n} marka artık bu repoda kendi klasörünü kullanıyor.",
+    brand_folder_created: "Marka kaydedildi. {folder}/ klasörü GitHub reponda oluşturuldu.",
+    brand_folder_failed: "Marka kaydedildi ama klasörü GitHub'da oluşturulamadı. Hesap sayfasındaki token'ı kontrol et.",
+    brand_storage_auto: "Videolar GitHub reposu {repo} içinde, bu markanın adıyla bir klasörde saklanacak.",
+    brand_storage_missing: "Hesabında henüz GitHub deposu yok. Hesap sayfasında ayarla, her marka otomatik kendi klasörünü alsın.",
+    storage_from_account: "Hesabından",
     storage_set: "Depoyu ayarla",
     storage_private: "gizli",
     storage_public: "herkese açık",
@@ -903,20 +931,21 @@ export function dashboardPage(lang: Lang, nonce: string, defaultTz: string, acto
       <div class="field"><label class="lbl" for="b-tz">${L("b_tz")}</label><select id="b-tz" name="tz"></select></div>
       <div class="field"><label class="lbl" for="b-limit">${L("b_limit")}</label><input id="b-limit" name="limit" type="number" min="1" max="10" value="3"></div>
     </div>
+    <p class="notice hidden" id="brand-storage-note"></p>
     <div class="field"><label class="lbl" for="b-times">${L("b_times")}</label><input id="b-times" name="times" placeholder="10:00, 15:00, 18:00"><div class="hint tiny faint">${L("b_times_hint")}</div></div>
   </div>
   <div class="dlg-foot"><button type="button" class="btn danger hidden" id="brand-del">${L("delete_brand")}</button><span class="grow"></span><button type="button" class="btn ghost" data-close="1">${L("cancel")}</button><button type="submit" class="btn">${L("save")}</button></div>
 </form></dialog>
 
 <dialog id="dlg-storage"><form id="storage-form" novalidate>
-  <div class="dlg-head"><h2>${ICONS.github} ${L("storage_title")}</h2><button type="button" class="btn ghost icon right" data-close="1" aria-label="${L("close")}">${ICONS.x}</button></div>
+  <div class="dlg-head"><h2>${ICONS.github} <span id="storage-ht">${L("storage_title")}</span></h2><button type="button" class="btn ghost icon right" data-close="1" aria-label="${L("close")}">${ICONS.x}</button></div>
   <div class="dlg-body">
-    <p class="small muted">${L("storage_intro")}</p>
+    <p class="small muted" id="storage-intro">${L("storage_intro")}</p>
     <div class="grid g2">
       <div class="field"><label class="lbl" for="s-repo">${L("s_repo")}</label><input id="s-repo" name="repo" required placeholder="owner/my-videos"></div>
       <div class="field"><label class="lbl" for="s-branch">${L("s_branch")}</label><input id="s-branch" name="branch" placeholder="main"></div>
     </div>
-    <div class="field"><label class="lbl" for="s-path">${L("s_path")}</label><input id="s-path" name="path" placeholder="videos"></div>
+    <div class="field"><label class="lbl" for="s-path" id="s-path-l">${L("s_path")}</label><input id="s-path" name="path" placeholder="videos"><div class="hint tiny faint hidden" id="s-path-hint">${L("s_path_account_hint")}</div></div>
     <div class="field"><label class="lbl" for="s-token">${L("s_token")}</label><input id="s-token" name="token" type="password" autocomplete="off" spellcheck="false" placeholder="github_pat_…">
       <div class="hint tiny faint" id="s-token-hint">${L("s_token_hint")}</div></div>
     <details class="adv"><summary>${L("s_howto")}</summary><ol class="steps small mt8">
