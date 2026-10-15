@@ -65,5 +65,12 @@ for (const k of Object.keys(cfg.vars)) {
   if (env[k] !== undefined && env[k] !== "") cfg.vars[k] = String(env[k]).trim();
 }
 
+// Each deploy replaces the worker's variables with these values, so an empty one wipes a value set in the dashboard.
+if (!cfg.vars.SUPERADMIN_EMAIL) {
+  console.log(
+    '::warning title=SUPERADMIN_EMAIL is empty::The superadmin sign-in name will be "admin". Set the SUPERADMIN_EMAIL repository variable (Settings → Secrets and variables → Actions → Variables), otherwise signing in with your email fails after this deploy.',
+  );
+}
+
 writeFileSync(new URL("../wrangler.deploy.json", import.meta.url), JSON.stringify(cfg, null, 2) + "\n");
 console.log(`wrangler.deploy.json written for worker "${cfg.name}"${cfg.routes ? ` on ${cfg.routes[0].pattern}` : ""}`);
