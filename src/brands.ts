@@ -228,3 +228,11 @@ export async function deleteBrand(env: Env, actor: Actor, id: string): Promise<v
     env.DB.prepare("DELETE FROM brands WHERE id = ?").bind(id),
   ]);
 }
+
+/** The brand an MCP call is about: the given id, or the only brand the user has. */
+export async function resolveBrandId(env: Env, actor: Actor, value: unknown): Promise<string> {
+  if (typeof value === "string" && value) return value;
+  const all = await listBrands(env, actor);
+  if (all.length === 1) return all[0].id;
+  throw new AppError("b.pick", { brands: all.map((b) => b.id).join(", ") || "-" });
+}

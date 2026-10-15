@@ -103,14 +103,29 @@ export interface NewPostInput {
 }
 
 const ALLOWED_OPTIONS: Record<Platform, Record<string, "boolean" | "string">> = {
-  youtube: { privacy: "string", category: "string", madeForKids: "boolean", notifySubscribers: "boolean" },
+  youtube: {
+    privacy: "string",
+    category: "string",
+    madeForKids: "boolean",
+    notifySubscribers: "boolean",
+    language: "string",
+    audioLanguage: "string",
+    license: "string",
+    embeddable: "boolean",
+    publicStatsViewable: "boolean",
+    aiGenerated: "boolean",
+  },
   instagram: { shareToFeed: "boolean" },
   tiktok: { privacy: "string", disableComment: "boolean", disableDuet: "boolean", disableStitch: "boolean" },
 };
 
 const ENUMS: Record<string, string[]> = {
   "youtube.privacy": ["public", "unlisted", "private"],
-  "youtube.category": ["EDUCATION", "PEOPLE_BLOGS", "ENTERTAINMENT", "NONPROFITS_ACTIVISM", "FILM_ANIMATION", "HOWTO_STYLE"],
+  "youtube.category": [
+    "FILM_ANIMATION", "AUTOS", "MUSIC", "PETS_ANIMALS", "SPORTS", "TRAVEL_EVENTS", "GAMING", "PEOPLE_BLOGS", "COMEDY",
+    "ENTERTAINMENT", "NEWS_POLITICS", "HOWTO_STYLE", "EDUCATION", "SCIENCE_TECH", "NONPROFITS_ACTIVISM",
+  ],
+  "youtube.license": ["youtube", "creativeCommon"],
   "tiktok.privacy": ["PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "FOLLOWER_OF_CREATOR", "SELF_ONLY"],
 };
 
@@ -166,6 +181,7 @@ export function validateNewPost(
       if (typeof v !== type) throw new AppError(type === "boolean" ? "v.option_bool" : "v.option_text", { key: k });
       const en = ENUMS[`${platform}.${k}`];
       if (en && !en.includes(v as string)) throw new AppError("v.option_enum", { key: k, values: en.join(", ") });
+      if ((k === "language" || k === "audioLanguage") && !/^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$/.test(v as string)) throw new AppError("v.language", { key: k });
       options[k] = v;
     }
   }

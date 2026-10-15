@@ -334,9 +334,23 @@
       (a.top_errors.length
         ? a.top_errors.map((e) => '<div class="check"><div class="ct grow">' + pfBadge(e.platform) + " " + esc(e.message || "") + '</div><span class="tiny faint">' + esc(tr("an_times", { n: e.count })) + "</span></div>").join("")
         : empty("check", T.an_no_errors)) + "</div>";
+    let ytCard = "";
+    try {
+      const y = await api("/api/youtube/stats?brand=" + encodeURIComponent(S.brand));
+      const n = (v) => (v === null || v === undefined ? "–" : Number(v).toLocaleString(LANG));
+      const rows = y.videos.map((v) => "<tr><td>" + esc(v.title || v.video_id) + '</td><td class="small nowrap">' + esc(new Date(v.published_at).toLocaleDateString(LANG)) + "</td><td>" + n(v.views) + "</td><td>" + n(v.likes) + "</td><td>" + n(v.comments) +
+        '</td><td><a class="btn ghost sm" href="' + esc(v.url) + '" target="_blank" rel="noopener noreferrer">' + ICON.external + "</a></td></tr>").join("");
+      ytCard = '<div class="stack-sm"><div class="row"><h2>' + pfBadge("youtube") + " " + esc(T.an_yt_title) + ": " + esc(y.channel.title) + "</h2></div>" +
+        '<div class="grid g4">' + stat(T.an_yt_subs, y.channel.subscribers === null ? T.an_yt_hidden : n(y.channel.subscribers)) + stat(T.an_yt_views, n(y.channel.views)) +
+        stat(T.an_yt_videos, n(y.channel.videos)) + stat(T.an_yt_kervly, y.kervly_videos.count + " · " + n(y.kervly_videos.views)) + "</div>" +
+        (rows ? '<div class="card tight"><div class="tablewrap"><table><thead><tr><th>' + esc(T.an_yt_recent) + "</th><th>" + esc(T.th_time) + "</th><th>" + esc(T.th_views) + "</th><th>" + esc(T.th_likes) + "</th><th>" + esc(T.th_comments) + "</th><th></th></tr></thead><tbody>" + rows + "</tbody></table></div></div>" : "") + "</div>";
+    } catch (e) {
+      ytCard = '<div class="card stack-sm"><div class="row">' + pfBadge("youtube") + "<h2>" + esc(T.an_yt_title) + '</h2></div><div class="small muted">' + esc(e.message) + "</div>" +
+        '<div><a class="btn ghost sm" href="/connect/youtube?brand=' + encodeURIComponent(S.brand) + '">' + esc(T.an_yt_connect) + "</a></div></div>";
+    }
     return (
       head(T.analytics, esc(tr("an_sub", { brand: cur().name })), '<div class="seg">' + seg + "</div>") +
-      '<div class="stack">' + stats + daily + '<div class="grid g2 align-start">' + plat + src + "</div>" + '<div class="grid g2 align-start">' + hours + errs + "</div></div>"
+      '<div class="stack">' + stats + daily + '<div class="grid g2 align-start">' + plat + src + "</div>" + '<div class="grid g2 align-start">' + hours + errs + "</div>" + ytCard + "</div>"
     );
   }
 
@@ -376,6 +390,12 @@
     f.yt_privacy.value = o.privacy && p.platform === "youtube" ? o.privacy : "public";
     f.yt_category.value = o.category || "PEOPLE_BLOGS";
     f.yt_kids.checked = !!o.madeForKids;
+    f.yt_lang.value = o.language || "";
+    f.yt_alang.value = o.audioLanguage || "";
+    f.yt_license.value = o.license || "youtube";
+    f.yt_embed.checked = o.embeddable !== false;
+    f.yt_stats.checked = o.publicStatsViewable !== false;
+    f.yt_ai.checked = !!o.aiGenerated;
     f.ig_feed.checked = o.shareToFeed !== false;
     f.tt_comments.checked = !o.disableComment;
     // Default time chips
@@ -569,7 +589,11 @@
     const btn = $("#post-save");
     btn.disabled = true;
     const options = {
-      youtube: { privacy: f.yt_privacy.value, category: f.yt_category.value, madeForKids: f.yt_kids.checked },
+      youtube: {
+        privacy: f.yt_privacy.value, category: f.yt_category.value, madeForKids: f.yt_kids.checked,
+        license: f.yt_license.value, embeddable: f.yt_embed.checked, publicStatsViewable: f.yt_stats.checked, aiGenerated: f.yt_ai.checked,
+        ...(f.yt_lang.value ? { language: f.yt_lang.value } : {}), ...(f.yt_alang.value ? { audioLanguage: f.yt_alang.value } : {}),
+      },
       instagram: { shareToFeed: f.ig_feed.checked },
       tiktok: { disableComment: !f.tt_comments.checked },
     };

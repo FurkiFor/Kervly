@@ -1,15 +1,26 @@
 import { openMedia } from "../media";
 import { apiError, form, PlatformError, type PlatformAdapter } from "./types";
 
-/** Least privilege: upload only. */
-const SCOPE = "https://www.googleapis.com/auth/youtube.upload";
+/** Least privilege: upload videos, and read-only access for channel statistics. */
+export const SCOPE_UPLOAD = "https://www.googleapis.com/auth/youtube.upload";
+export const SCOPE_READ = "https://www.googleapis.com/auth/youtube.readonly";
+const SCOPE = `${SCOPE_UPLOAD} ${SCOPE_READ}`;
 
-const CATEGORY_IDS: Record<string, string> = {
+export const CATEGORY_IDS: Record<string, string> = {
   FILM_ANIMATION: "1",
+  AUTOS: "2",
+  MUSIC: "10",
+  PETS_ANIMALS: "15",
+  SPORTS: "17",
+  TRAVEL_EVENTS: "19",
+  GAMING: "20",
   PEOPLE_BLOGS: "22",
+  COMEDY: "23",
   ENTERTAINMENT: "24",
+  NEWS_POLITICS: "25",
   HOWTO_STYLE: "26",
   EDUCATION: "27",
+  SCIENCE_TECH: "28",
   NONPROFITS_ACTIVISM: "29",
 };
 
@@ -48,10 +59,25 @@ export const youtube: PlatformAdapter = {
     const j = (await r.json()) as { access_token: string; refresh_token?: string; expires_in: number; scope: string };
     if (!j.refresh_token) throw new PlatformError("pf.no_refresh");
     if (!String(j.scope).includes("youtube.upload")) throw new PlatformError("pf.scope", { scope: "youtube.upload" });
+    // With the read-only permission the connection is named after the channel (best effort)
+    let account_id = "youtube";
+    let account_name = "YouTube";
+    if (String(j.scope).includes("youtube.readonly")) {
+      try {
+        const c = await fetch("https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true", { headers: { Authorization: `Bearer ${j.access_token}` } });
+        const ch = c.ok ? ((await c.json()) as { items?: { id: string; snippet?: { title?: string } }[] }).items?.[0] : undefined;
+        if (ch) {
+          account_id = ch.id;
+          account_name = (ch.snippet?.title || "YouTube").slice(0, 100);
+        }
+      } catch {
+        /* keep the generic name */
+      }
+    }
     return {
-      tokens: { access_token: j.access_token, refresh_token: j.refresh_token, expires_at: Date.now() + j.expires_in * 1000 },
-      account_id: "youtube",
-      account_name: "YouTube",
+      tokens: { access_token: j.access_token, refresh_token: j.refresh_token, expires_at: Date.now() + j.expires_in * 1000, scope: j.scope },
+      account_id,
+      account_name,
     };
   },
 
@@ -72,23 +98,31 @@ export const youtube: PlatformAdapter = {
       throw e;
     }
     const j = (await r.json()) as { access_token: string; expires_in: number; refresh_token?: string };
-    return { access_token: j.access_token, refresh_token: j.refresh_token || tokens.refresh_token, expires_at: now + j.expires_in * 1000 };
+    return { access_token: j.access_token, refresh_token: j.refresh_token || tokens.refresh_token, expires_at: now + j.expires_in * 1000, scope: tokens.scope };
   },
 
   async start(_env, post, account) {
     const opts = JSON.parse(post.options || "{}") as Record<string, unknown>;
     const media = await (post.media_open ? post.media_open() : openMedia(post.media_url));
+    const str = (k: string) => (typeof opts[k] === "string" && opts[k] ? (opts[k] as string) : undefined);
+    const bool = (k: string) => (typeof opts[k] === "boolean" ? (opts[k] as boolean) : undefined);
     const metadata = {
       snippet: {
         title: post.title,
         description: post.caption,
         tags: JSON.parse(post.tags || "[]"),
         categoryId: CATEGORY_IDS[(opts.category as string) || "PEOPLE_BLOGS"] || "22",
+        ...(str("language") ? { defaultLanguage: str("language") } : {}),
+        ...(str("audioLanguage") ? { defaultAudioLanguage: str("audioLanguage") } : {}),
       },
       status: {
         privacyStatus: (opts.privacy as string) || "public",
         selfDeclaredMadeForKids: Boolean(opts.madeForKids ?? false),
-        containsSyntheticMedia: false,
+        // Disclosure for realistic AI-generated or altered content
+        containsSyntheticMedia: Boolean(opts.aiGenerated ?? false),
+        ...(str("license") ? { license: str("license") } : {}),
+        ...(bool("embeddable") !== undefined ? { embeddable: bool("embeddable") } : {}),
+        ...(bool("publicStatsViewable") !== undefined ? { publicStatsViewable: bool("publicStatsViewable") } : {}),
       },
     };
     const qs = new URLSearchParams({ uploadType: "resumable", part: "snippet,status" });

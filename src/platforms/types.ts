@@ -8,6 +8,8 @@ export interface TokenSet {
   /** ms epoch; 0 = unknown */
   expires_at: number;
   refresh_expires_at?: number;
+  /** Space-separated OAuth scopes the user granted (YouTube). */
+  scope?: string;
 }
 
 export interface ConnectedAccount {

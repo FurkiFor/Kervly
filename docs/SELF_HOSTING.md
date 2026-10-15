@@ -105,7 +105,7 @@ You create **one app per platform** (below). Every brand then connects its own a
 ## 7. YouTube
 
 1. [Google Cloud Console](https://console.cloud.google.com/): create a project and enable **YouTube Data API v3**.
-2. *Google Auth Platform*: set the audience to *External*, add the scope `.../auth/youtube.upload`, and add yourself as a test user.
+2. *Google Auth Platform*: set the audience to *External*, add the scopes `.../auth/youtube.upload` and `.../auth/youtube.readonly` (channel statistics), and add yourself as a test user. Existing YouTube connections must be reconnected once to grant the read-only permission.
    Then **Publish app → In production**. In *Testing* mode refresh tokens expire after 7 days.
 3. *Clients → Create client → Web application*. Set *Authorized redirect URI* to `<URL>/connect/youtube/callback`.
 4. Add Cloudflare secrets `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.

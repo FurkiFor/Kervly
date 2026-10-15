@@ -274,3 +274,102 @@ describe("account storage", () => {
     expect(brandFolder("clips", "alpha")).toBe("clips/alpha");
   });
 });
+
+describe("youtube options", () => {
+  const brand = { allowed_prefixes: ["https://raw.githubusercontent.com/o/r/main/v/"] };
+  const env = { MEDIA_ALLOWED_HOSTS: "raw.githubusercontent.com" };
+  const base = { platform: "youtube", media_url: "https://raw.githubusercontent.com/o/r/main/v/a.mp4", title: "T", publish_at: new Date(Date.now() + 3600_000).toISOString() };
+
+  it("accepts the extra upload options", () => {
+    const p = validateNewPost(
+      { ...base, options: { language: "tr", audioLanguage: "ar", license: "creativeCommon", embeddable: false, publicStatsViewable: false, aiGenerated: true, category: "SCIENCE_TECH" } },
+      brand,
+      env,
+    );
+    expect(p.options).toMatchObject({ language: "tr", license: "creativeCommon", embeddable: false, aiGenerated: true, category: "SCIENCE_TECH" });
+  });
+  it("rejects a bad language code, license or category", () => {
+    expect(() => validateNewPost({ ...base, options: { language: "turkish!" } }, brand, env)).toThrow(AppError);
+    expect(() => validateNewPost({ ...base, options: { license: "gpl" } }, brand, env)).toThrow(AppError);
+    expect(() => validateNewPost({ ...base, options: { category: "NOPE" } }, brand, env)).toThrow(AppError);
+  });
+
+  it("sends the options to YouTube", async () => {
+    const { youtube } = await import("../src/platforms/youtube");
+    let sent: { snippet: Record<string, unknown>; status: Record<string, unknown> } | null = null;
+    // Workers-only class: a plain TransformStream is enough here
+    (globalThis as Record<string, unknown>).FixedLengthStream = class {
+      constructor() {
+        return new TransformStream();
+      }
+    };
+    const orig = globalThis.fetch;
+    globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        sent = JSON.parse(String(init.body));
+        return new Response(null, { status: 200, headers: { Location: "https://www.googleapis.com/upload/x" } });
+      }
+      await new Response(init?.body as ReadableStream).arrayBuffer(); // drain the upload stream
+      return Response.json({ id: "vid123" });
+    }) as typeof fetch;
+    try {
+      const post = {
+        options: JSON.stringify({ language: "tr", audioLanguage: "tr", license: "creativeCommon", embeddable: false, publicStatsViewable: true, aiGenerated: true, category: "MUSIC", privacy: "unlisted" }),
+        title: "T", caption: "C", tags: "[]", media_url: "u",
+        media_open: async () => ({ body: new Response("x").body!, size: 1 }),
+      } as never;
+      const r = await youtube.start({} as never, post, { tokens: { access_token: "a", expires_at: 0 }, account_id: "", account_name: "" });
+      expect(r).toMatchObject({ state: "published", external_id: "vid123" });
+      expect(sent!.snippet).toMatchObject({ defaultLanguage: "tr", defaultAudioLanguage: "tr", categoryId: "10" });
+      expect(sent!.status).toMatchObject({ privacyStatus: "unlisted", license: "creativeCommon", embeddable: false, publicStatsViewable: true, containsSyntheticMedia: true });
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
+
+  it("asks for the read-only permission when connecting", () => {
+    const url = new URL(youtube_authUrl());
+    expect(url.searchParams.get("scope")).toContain("youtube.upload");
+    expect(url.searchParams.get("scope")).toContain("youtube.readonly");
+  });
+});
+
+import { youtube as ytAdapter } from "../src/platforms/youtube";
+function youtube_authUrl() {
+  return ytAdapter.authUrl({ GOOGLE_CLIENT_ID: "id" } as never, "https://x/cb", "st", "ch");
+}
+
+describe("youtube stats", () => {
+  it("combines channel and video statistics", async () => {
+    const key = b64(new Uint8Array(32).fill(5));
+    const enc = await encryptJson(key, { access_token: "tok", refresh_token: "r", expires_at: Date.now() + 3600_000, scope: "x youtube.readonly" }, "conn:demo:youtube");
+    const env = {
+      ENCRYPTION_KEY: key,
+      DB: {
+        prepare: (sql: string) => ({
+          bind: () => ({
+            first: async () => (sql.includes("FROM brands") ? { id: "demo", name: "Demo", media_prefixes: "[]", max_posts_per_day: 3, timezone: "UTC", default_times: "[]", owner_id: "u1" } : { brand_id: "demo", platform: "youtube", account_id: "UC1", account_name: "My Channel", enc_tokens: enc, access_expires_at: 0, updated_at: 0 }),
+            all: async () => ({ results: [{ id: "p_1", title: "First", external_id: "v1", publish_at: 1_700_000_000_000 }, { id: "p_2", title: "Second", external_id: "v2", publish_at: 1_700_100_000_000 }] }),
+            run: async () => ({}),
+          }),
+        }),
+      },
+    };
+    const orig = globalThis.fetch;
+    globalThis.fetch = (async (url: string) => {
+      if (String(url).includes("/channels")) {
+        return Response.json({ items: [{ id: "UC1", snippet: { title: "My Channel", customUrl: "@mine" }, statistics: { subscriberCount: "1200", viewCount: "98765", videoCount: "40" } }] });
+      }
+      return Response.json({ items: [{ id: "v1", statistics: { viewCount: "100", likeCount: "10", commentCount: "2" } }, { id: "v2", statistics: { viewCount: "50", likeCount: "5" } }] });
+    }) as typeof fetch;
+    try {
+      const { youtubeStats } = await import("../src/youtube-stats");
+      const r = await youtubeStats(env as never, { id: "u1", email: "a@b.c", role: "user" } as never, "demo");
+      expect(r.channel).toMatchObject({ id: "UC1", title: "My Channel", handle: "@mine", subscribers: 1200, views: 98765, videos: 40 });
+      expect(r.kervly_videos).toEqual({ count: 2, views: 150, likes: 15, comments: 2 });
+      expect(r.videos[0]).toMatchObject({ video_id: "v1", views: 100, url: "https://www.youtube.com/shorts/v1" });
+    } finally {
+      globalThis.fetch = orig;
+    }
+  });
+});

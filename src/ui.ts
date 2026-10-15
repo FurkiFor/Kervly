@@ -168,7 +168,7 @@ const UI = {
     wd5: "Sat",
     wd6: "Sun",
     analytics: "Analytics",
-    an_sub: "Publishing results for {brand}, based on Kervly's own queue (platform view counts are not included).",
+    an_sub: "Publishing results for {brand} from Kervly's own queue. YouTube channel statistics are at the bottom.",
     an_range: "Last {n} days",
     an_published: "Published",
     an_failed: "Failed",
@@ -186,6 +186,17 @@ const UI = {
     an_no_errors: "No errors in this period.",
     an_no_data: "Nothing published in this period yet.",
     an_times: "{n}×",
+    an_yt_title: "YouTube channel",
+    an_yt_subs: "Subscribers",
+    an_yt_views: "Channel views",
+    an_yt_videos: "Videos on channel",
+    an_yt_kervly: "Published with Kervly",
+    an_yt_recent: "Videos published with Kervly",
+    an_yt_connect: "Connect or reconnect YouTube",
+    an_yt_hidden: "Hidden",
+    th_views: "Views",
+    th_likes: "Likes",
+    th_comments: "Comments",
     logout: "Sign out",
     brand: "Brand",
     // dashboard
@@ -314,6 +325,15 @@ const UI = {
     f_private: "Private",
     f_yt_category: "YouTube category",
     f_kids: "Made for kids",
+    f_yt_lang: "Video language",
+    f_yt_alang: "Spoken language",
+    f_auto: "Auto",
+    f_yt_license: "License",
+    f_license_youtube: "Standard YouTube license",
+    f_license_cc: "Creative Commons",
+    f_yt_embed: "Allow embedding on other sites",
+    f_yt_stats: "Show view counts publicly",
+    f_yt_ai: "Contains realistic AI-generated or altered content",
     f_ig_feed: "Also show the Reel in the Instagram feed",
     f_tt_comments: "Allow comments on TikTok",
     save: "Save",
@@ -486,7 +506,7 @@ const UI = {
     wd5: "Cmt",
     wd6: "Paz",
     analytics: "Analitik",
-    an_sub: "{brand} için yayın sonuçları. Kervly'nin kendi kuyruğuna dayanır (platformların izlenme sayıları dahil değildir).",
+    an_sub: "{brand} için yayın sonuçları, Kervly'nin kendi kuyruğundan. YouTube kanal istatistikleri en altta.",
     an_range: "Son {n} gün",
     an_published: "Yayınlanan",
     an_failed: "Başarısız",
@@ -504,6 +524,17 @@ const UI = {
     an_no_errors: "Bu dönemde hata yok.",
     an_no_data: "Bu dönemde henüz yayınlanan yok.",
     an_times: "{n}×",
+    an_yt_title: "YouTube kanalı",
+    an_yt_subs: "Abone",
+    an_yt_views: "Kanal izlenmesi",
+    an_yt_videos: "Kanaldaki video",
+    an_yt_kervly: "Kervly ile yayınlanan",
+    an_yt_recent: "Kervly ile yayınlanan videolar",
+    an_yt_connect: "YouTube'u bağla veya yeniden bağla",
+    an_yt_hidden: "Gizli",
+    th_views: "İzlenme",
+    th_likes: "Beğeni",
+    th_comments: "Yorum",
     logout: "Çıkış",
     brand: "Marka",
     session_over: "Oturum bitti",
@@ -630,6 +661,15 @@ const UI = {
     f_private: "Özel",
     f_yt_category: "YouTube kategorisi",
     f_kids: "Çocuklara özel",
+    f_yt_lang: "Video dili",
+    f_yt_alang: "Konuşma dili",
+    f_auto: "Otomatik",
+    f_yt_license: "Lisans",
+    f_license_youtube: "Standart YouTube lisansı",
+    f_license_cc: "Creative Commons",
+    f_yt_embed: "Başka sitelerde yerleştirmeye izin ver",
+    f_yt_stats: "İzlenme sayılarını herkese göster",
+    f_yt_ai: "Gerçekçi yapay zekâ ile üretilmiş veya değiştirilmiş içerik içeriyor",
     f_ig_feed: "Reel'i Instagram akışında da göster",
     f_tt_comments: "TikTok'ta yorumlara izin ver",
     save: "Kaydet",
@@ -851,6 +891,15 @@ export function legalPage(lang: Lang, nonce: string, kind: "privacy" | "terms"):
   return layout(lang, t(lang, kind), `<div class="auth"><div class="card stack wider"><div class="row between">${LOGO}${langSwitch(lang)}</div>${LEGAL[lang][kind]}</div></div>`, nonce);
 }
 
+const YT_CATEGORIES: [string, string][] = [
+  ["PEOPLE_BLOGS", "People & Blogs"], ["EDUCATION", "Education"], ["ENTERTAINMENT", "Entertainment"], ["HOWTO_STYLE", "Howto & Style"],
+  ["SCIENCE_TECH", "Science & Technology"], ["NEWS_POLITICS", "News & Politics"], ["COMEDY", "Comedy"], ["MUSIC", "Music"], ["GAMING", "Gaming"],
+  ["SPORTS", "Sports"], ["TRAVEL_EVENTS", "Travel & Events"], ["PETS_ANIMALS", "Pets & Animals"], ["AUTOS", "Autos & Vehicles"],
+  ["FILM_ANIMATION", "Film & Animation"], ["NONPROFITS_ACTIVISM", "Nonprofits & Activism"],
+];
+const YT_LANGS = ["en", "tr", "ar", "de", "es", "fr", "id", "pt", "ru", "hi", "ur", "fa", "it", "ja", "ko", "nl", "ms", "bn"];
+const langName = (code: string, lang: Lang) => new Intl.DisplayNames([lang], { type: "language" }).of(code) ?? code;
+
 /** The dashboard shell. Views are rendered by src/client/dashboard.js.txt. */
 export function dashboardPage(lang: Lang, nonce: string, defaultTz: string, actor: Actor): string {
   const L = (k: UiKey) => t(lang, k);
@@ -909,8 +958,16 @@ export function dashboardPage(lang: Lang, nonce: string, defaultTz: string, acto
     <details class="adv"><summary>${L("f_advanced")}</summary><div class="stack-sm mt12">
       <div class="grid g2" data-pf-section="youtube">
         <div><label class="lbl" for="f-ytp">${L("f_yt_privacy")}</label><select id="f-ytp" name="yt_privacy">${opt("public", L("f_public"))}${opt("unlisted", L("f_unlisted"))}${opt("private", L("f_private"))}</select></div>
-        <div><label class="lbl" for="f-ytc">${L("f_yt_category")}</label><select id="f-ytc" name="yt_category">${["PEOPLE_BLOGS", "EDUCATION", "ENTERTAINMENT", "HOWTO_STYLE", "FILM_ANIMATION", "NONPROFITS_ACTIVISM"].map((c) => opt(c, c.replace("_", " & ").replace("PEOPLE & BLOGS", "People & Blogs").toLowerCase().replace(/(^|\s|&\s)\w/g, (m) => m.toUpperCase()))).join("")}</select></div>
-        <label class="row small"><input type="checkbox" name="yt_kids"> ${L("f_kids")}</label>
+        <div><label class="lbl" for="f-ytc">${L("f_yt_category")}</label><select id="f-ytc" name="yt_category">${YT_CATEGORIES.map(([c, label]) => opt(c, label)).join("")}</select></div>
+        <div><label class="lbl" for="f-ytl">${L("f_yt_lang")}</label><select id="f-ytl" name="yt_lang">${opt("", L("f_auto"))}${YT_LANGS.map((c) => opt(c, langName(c, lang))).join("")}</select></div>
+        <div><label class="lbl" for="f-yta">${L("f_yt_alang")}</label><select id="f-yta" name="yt_alang">${opt("", L("f_auto"))}${YT_LANGS.map((c) => opt(c, langName(c, lang))).join("")}</select></div>
+        <div><label class="lbl" for="f-ytlic">${L("f_yt_license")}</label><select id="f-ytlic" name="yt_license">${opt("youtube", L("f_license_youtube"))}${opt("creativeCommon", L("f_license_cc"))}</select></div>
+        <div class="stack-sm">
+          <label class="row small"><input type="checkbox" name="yt_kids"> ${L("f_kids")}</label>
+          <label class="row small"><input type="checkbox" name="yt_embed" checked> ${L("f_yt_embed")}</label>
+          <label class="row small"><input type="checkbox" name="yt_stats" checked> ${L("f_yt_stats")}</label>
+          <label class="row small"><input type="checkbox" name="yt_ai"> ${L("f_yt_ai")}</label>
+        </div>
       </div>
       <label class="row small" data-pf-section="instagram"><input type="checkbox" name="ig_feed" checked> ${L("f_ig_feed")}</label>
       <label class="row small" data-pf-section="tiktok"><input type="checkbox" name="tt_comments" checked> ${L("f_tt_comments")}</label>

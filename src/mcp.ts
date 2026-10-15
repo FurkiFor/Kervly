@@ -1,7 +1,8 @@
 import { PLATFORMS, type Actor, type Env } from "./env";
 import { cancelPost, createPost, editPost, getPostFor, listPosts, parseWhen, recentAudit, retryPost, toView, type NewPostInput } from "./db";
 import { connectionStatus } from "./connections";
-import { getBrand, listBrands } from "./brands";
+import { getBrand, listBrands, resolveBrandId } from "./brands";
+import { youtubeStats } from "./youtube-stats";
 import { analytics, calendar, nextSlots, suggestSlots } from "./insights";
 import { AppError, localize, parseLang, type Lang } from "./i18n";
 import { APP_NAME, APP_VERSION } from "./config";
@@ -10,7 +11,7 @@ import { APP_NAME, APP_VERSION } from "./config";
 
 const SUPPORTED_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26"];
 
-const brandProp = { type: "string", description: "Brand id (see list_brands), e.g. mybrand" };
+const brandProp = { type: "string", description: "Brand id (see list_brands), e.g. mybrand. Optional when you have only one brand." };
 
 const postProps = {
   media_url: { type: "string", description: "Public .mp4 URL that starts with one of the brand's allowlisted prefixes" },
@@ -36,7 +37,6 @@ export const TOOLS = [
     inputSchema: {
       type: "object",
       properties: { brand: brandProp, month: { type: "string", description: "YYYY-MM, defaults to the current month in the brand's time zone" } },
-      required: ["brand"],
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true },
@@ -52,20 +52,26 @@ export const TOOLS = [
         platforms: { type: "array", items: { type: "string", enum: [...PLATFORMS] }, description: "Defaults to all platforms; a slot is only free if it is free on each of them" },
         count: { type: "integer", minimum: 1, maximum: 20, description: "How many slots (default 5)" },
       },
-      required: ["brand"],
       additionalProperties: false,
     },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: "get_youtube_stats",
+    title: "YouTube channel statistics",
+    description:
+      "Live statistics of the brand's connected YouTube channel (subscribers, total views, video count) plus views, likes and comments of the videos Kervly published. Needs the read-only permission: if it is missing, reconnect YouTube in the dashboard Setup.",
+    inputSchema: { type: "object", properties: { brand: brandProp }, additionalProperties: false },
     annotations: { readOnlyHint: true },
   },
   {
     name: "get_analytics",
     title: "Publishing analytics",
     description:
-      "Publishing statistics for a brand over the last 7, 30 or 90 days: published/failed counts, success rate, per-platform and per-source split, busiest hours, daily series, posting streak and the most frequent errors. Based on Kervly's own queue, not on platform view counts.",
+      "Publishing statistics for a brand over the last 7, 30 or 90 days: published/failed counts, success rate, per-platform and per-source split, busiest hours, daily series, posting streak and the most frequent errors. Based on Kervly's own queue; for YouTube views, likes and subscribers use get_youtube_stats.",
     inputSchema: {
       type: "object",
       properties: { brand: brandProp, days: { type: "integer", enum: [7, 30, 90], description: "Default 30" } },
-      required: ["brand"],
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true },
@@ -84,10 +90,10 @@ export const TOOLS = [
         options: {
           type: "object",
           description:
-            "Per-platform options keyed by platform: {youtube:{privacy,category,madeForKids,notifySubscribers}, instagram:{shareToFeed}, tiktok:{privacy,disableComment,disableDuet,disableStitch}}",
+            "Per-platform options keyed by platform: {youtube:{privacy: public|unlisted|private, category: e.g. EDUCATION|ENTERTAINMENT|PEOPLE_BLOGS|MUSIC|GAMING|SCIENCE_TECH|NEWS_POLITICS|HOWTO_STYLE…, madeForKids, notifySubscribers, language (e.g. en, tr, ar), audioLanguage, license: youtube|creativeCommon, embeddable, publicStatsViewable, aiGenerated (disclose realistic AI-generated content)}, instagram:{shareToFeed}, tiktok:{privacy,disableComment,disableDuet,disableStitch}}",
         },
       },
-      required: ["brand", "platforms", "media_url"],
+      required: ["platforms", "media_url"],
       additionalProperties: false,
     },
   },
@@ -173,6 +179,7 @@ export async function callTool(env: Env, actor: Actor, name: string, args: Args,
     case "list_brands":
       return { brands: (await listBrands(env, actor)).map(({ storage, ...b }) => ({ ...b, storage: storage ? { repo: storage.repo, folder: storage.path, prefix: storage.prefix } : null })) };
     case "schedule_post": {
+      const brandId = await resolveBrandId(env, actor, args.brand);
       const platforms = args.platforms;
       if (!Array.isArray(platforms) || platforms.length === 0) throw new AppError("v.platforms_required");
       if (new Set(platforms).size !== platforms.length) throw new AppError("v.platforms_dupe");
@@ -181,7 +188,7 @@ export async function callTool(env: Env, actor: Actor, name: string, args: Args,
       // No time given: take the next free default slot of the brand's calendar (never "right now")
       let publishAt = args.publish_at;
       if (publishAt === undefined || publishAt === null || publishAt === "") {
-        const brand = await getBrand(env, args.brand, actor);
+        const brand = await getBrand(env, brandId, actor);
         const [slot] = await nextSlots(env, brand, platforms as never, 1);
         if (!slot) throw new AppError("post.no_slot");
         publishAt = slot.publish_at;
@@ -199,7 +206,7 @@ export async function callTool(env: Env, actor: Actor, name: string, args: Args,
           options: allOpts[platform as string],
         };
         try {
-          created.push(await createPost(env, actor, args.brand, input, "mcp", lang));
+          created.push(await createPost(env, actor, brandId, input, "mcp", lang));
         } catch (e) {
           errors.push({ platform, error: localize(e, lang) });
         }
@@ -208,11 +215,13 @@ export async function callTool(env: Env, actor: Actor, name: string, args: Args,
       return { created, errors };
     }
     case "get_calendar":
-      return calendar(env, actor, String(args.brand ?? ""), args.month as string | undefined, lang);
+      return calendar(env, actor, await resolveBrandId(env, actor, args.brand), args.month as string | undefined, lang);
     case "suggest_slots":
-      return suggestSlots(env, actor, String(args.brand ?? ""), args.platforms as never, Number(args.count) || 5);
+      return suggestSlots(env, actor, await resolveBrandId(env, actor, args.brand), args.platforms as never, Number(args.count) || 5);
     case "get_analytics":
-      return analytics(env, actor, String(args.brand ?? ""), args.days, lang);
+      return analytics(env, actor, await resolveBrandId(env, actor, args.brand), args.days, lang);
+    case "get_youtube_stats":
+      return youtubeStats(env, actor, await resolveBrandId(env, actor, args.brand));
     case "list_posts":
       return {
         posts: await listPosts(
@@ -279,7 +288,7 @@ async function dispatch(env: Env, actor: Actor, req: RpcRequest, lang: Lang) {
           "Rules: (1) Call list_brands first. (2) Nothing sent over MCP is published immediately: every post goes into the brand's calendar and the scheduler (runs every 5 minutes) publishes it at publish_at. " +
           "(3) Look at get_calendar or suggest_slots before scheduling; respect each brand's daily limit and default posting times. If you omit publish_at, the next free default slot is used. " +
           "(4) Always give publish_at as ISO 8601 with a time zone, at least a minute ahead and at most 60 days out. " +
-          "(5) Check list_posts with status=error for failures, retry_post to retry, get_analytics for results.",
+          "(5) Check list_posts with status=error for failures, retry_post to retry, get_analytics for publishing results and get_youtube_stats for channel and video statistics. (6) The brand parameter can be left out when the user has only one brand.",
       };
     }
     case "ping":

@@ -159,7 +159,7 @@ let m = await call("initialize", { protocolVersion: "2025-06-18", capabilities: 
 check("MCP initialize", m.body?.result?.serverInfo?.name === "kervly");
 check("notification → 202", (await fetch(`${BASE}/mcp`, { method: "POST", headers: { Authorization: `Bearer ${tok.access_token}`, "Content-Type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) })).status === 202);
 m = await call("tools/list", {});
-check("MCP tools/list", m.body?.result?.tools?.length === 12);
+check("MCP tools/list", m.body?.result?.tools?.length === 13);
 m = await call("tools/call", { name: "list_brands", arguments: {} });
 check("MCP list_brands", m.body?.result?.structuredContent?.brands?.length === 2);
 const when2 = new Date(Date.now() + 3 * 86400_000).toISOString().replace("Z", "+00:00");
@@ -187,6 +187,14 @@ check("MCP schedule_post without publish_at picks a free future slot", auto && D
 m = await call("tools/call", { name: "get_analytics", arguments: { brand: "demo", days: 7 } });
 const an = m.body?.result?.structuredContent;
 check("MCP get_analytics shape", an?.days === 7 && an?.series?.length === 7 && an?.totals && an?.by_platform?.youtube, JSON.stringify(m.body).slice(0, 300));
+m = await call("tools/call", { name: "get_youtube_stats", arguments: { brand: "demo" } });
+check("MCP get_youtube_stats without a connection → isError", m.body?.result?.isError === true);
+m = await call("tools/call", { name: "get_calendar", arguments: {} });
+check("MCP asks for a brand when the user has several", m.body?.result?.isError === true && /demo/.test(JSON.stringify(m.body)), JSON.stringify(m.body).slice(0, 200));
+m = await call("tools/call", { name: "schedule_post", arguments: { brand: "demo", platforms: ["youtube"], media_url: media, title: "Opts", publish_at: when2, options: { youtube: { language: "tr", license: "creativeCommon", aiGenerated: false, embeddable: true } } } });
+check("MCP schedule_post accepts the extra YouTube options", m.body?.result?.structuredContent?.created?.[0]?.options?.language === "tr", JSON.stringify(m.body).slice(0, 300));
+m = await call("tools/call", { name: "schedule_post", arguments: { brand: "demo", platforms: ["youtube"], media_url: media, title: "Bad", publish_at: when2, options: { youtube: { language: "turkish!" } } } });
+check("MCP schedule_post rejects a bad language code", m.body?.result?.isError === true);
 m = await call("tools/call", { name: "get_analytics", arguments: { brand: "yok" } });
 check("MCP get_analytics unknown brand → isError", m.body?.result?.isError === true);
 m = await call("tools/call", { name: "connection_status", arguments: {} });
