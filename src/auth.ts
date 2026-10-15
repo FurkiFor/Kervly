@@ -73,7 +73,10 @@ async function clearLimit(env: Env, key: string): Promise<void> {
   await env.SESSIONS.delete(`rl:${await sha256Hex(key)}`);
 }
 
-export type LoginResult = { ok: true; user: UserRow } | { ok: false; reason: "limited" | "invalid" | "not_configured" | "pending" | "unverified" | "disabled" | "code_required" };
+/** `why` is for the audit log only (the user always sees the same generic message). */
+export type LoginResult =
+  | { ok: true; user: UserRow }
+  | { ok: false; reason: "limited" | "invalid" | "not_configured" | "pending" | "unverified" | "disabled" | "code_required"; why?: string };
 
 async function totpOk(env: Env, secret: string, code: string): Promise<boolean> {
   const counter = await verifyTotp(secret, code.trim());
@@ -99,27 +102,29 @@ export async function login(req: Request, env: Env, emailIn: string, password: s
   if ((await overLimit(env, pairKey, MAX_FAILS)) || (await overLimit(env, ipKey, MAX_FAILS * 4)) || (await overLimit(env, emailKey, MAX_FAILS * 10))) {
     return { ok: false, reason: "limited" };
   }
-  const fail = async (reason: "invalid" | "code_required" = "invalid"): Promise<LoginResult> => {
+  const fail = async (reason: "invalid" | "code_required" = "invalid", why?: string): Promise<LoginResult> => {
     await bump(env, pairKey, FAIL_WINDOW);
     await bump(env, ipKey, FAIL_WINDOW);
     await bump(env, emailKey, FAIL_WINDOW);
-    return { ok: false, reason };
+    return { ok: false, reason, why };
   };
-  if (password.length === 0 || password.length > 256) return fail();
+  // Authenticator apps show codes as "123 456"; accept spaces and dashes
+  code = code.replace(/[\s-]/g, "");
+  if (password.length === 0 || password.length > 256) return fail("invalid", "bad_password");
 
   // Superadmin from the server configuration
   if (email === superadminLogin(env)) {
     if (!env.ADMIN_PASSWORD_HASH || !env.ADMIN_TOTP_SECRET) return { ok: false, reason: "not_configured" };
     const passOk = await verifyPassword(password, env.ADMIN_PASSWORD_HASH);
-    if (!passOk) return fail();
+    if (!passOk) return fail("invalid", "bad_password");
     if (!code) return fail("code_required");
-    if (!(await totpOk(env, env.ADMIN_TOTP_SECRET, code))) return fail();
+    if (!(await totpOk(env, env.ADMIN_TOTP_SECRET, code))) return fail("invalid", "bad_code");
     await clearLimit(env, pairKey);
     return { ok: true, user: await ensureSuperadmin(env) };
   }
 
   const r = await checkUserPassword(env, email, password);
-  if (!r.ok) return fail();
+  if (!r.ok) return fail("invalid", "bad_password_or_unknown_user");
   const u = r.user;
   if (u.status === "disabled") return { ok: false, reason: "disabled" };
   if (u.status === "unverified") return { ok: false, reason: "unverified" };
@@ -127,7 +132,7 @@ export async function login(req: Request, env: Env, emailIn: string, password: s
   const secret = await getUserTotp(env, u);
   if (secret) {
     if (!code) return fail("code_required");
-    if (!(await totpOk(env, secret, code))) return fail();
+    if (!(await totpOk(env, secret, code))) return fail("invalid", "bad_code");
   }
   await clearLimit(env, pairKey);
   return { ok: true, user: u };

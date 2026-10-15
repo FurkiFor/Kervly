@@ -380,7 +380,7 @@ async function handleAccountPages(req: Request, env: Env, url: URL, lang: Lang, 
     const next = safeNext(String(f.get("next") || "/"));
     const r = await login(req, env, String(f.get("email") || ""), String(f.get("password") || ""), String(f.get("code") || ""));
     if (!r.ok) {
-      await audit(env, "anon", "login.fail", `${r.reason} ${String(f.get("email") || "").slice(0, 80)}`);
+      await audit(env, "anon", "login.fail", `${r.reason}${r.why ? ":" + r.why : ""} ${String(f.get("email") || "").slice(0, 80)}`);
       return html(loginPage(lang, nonce, next, mode !== "closed", format(lang, LOGIN_REASON[r.reason]), String(f.get("email") || "")), nonce, {
         status: r.reason === "limited" ? 429 : 401,
       });
