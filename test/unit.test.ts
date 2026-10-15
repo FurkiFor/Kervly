@@ -191,3 +191,14 @@ describe("platform errors", () => {
     expect(calls.length).toBe(2);
   });
 });
+
+describe("totp clock tolerance", () => {
+  it("accepts up to 60 s of drift but not more", async () => {
+    const secret = base32Encode(new Uint8Array(20).fill(7));
+    const now = 1_700_000_000_000;
+    const counter = Math.floor(now / 1000 / 30);
+    expect(await verifyTotp(secret, await totpAt(secret, counter + 2), now)).toBe(counter + 2);
+    expect(await verifyTotp(secret, await totpAt(secret, counter - 2), now)).toBe(counter - 2);
+    expect(await verifyTotp(secret, await totpAt(secret, counter + 3), now)).toBeNull();
+  });
+});

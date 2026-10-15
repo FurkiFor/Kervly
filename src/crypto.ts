@@ -158,7 +158,8 @@ export async function totpAt(secretB32: string, counter: number): Promise<string
 export async function verifyTotp(secretB32: string, code: string, now = Date.now()): Promise<number | null> {
   if (!/^\d{6}$/.test(code)) return null;
   const counter = Math.floor(now / 1000 / 30);
-  for (const d of [0, -1, 1]) {
+  // ±60 s: tolerates a phone clock that is a little off
+  for (const d of [0, -1, 1, -2, 2]) {
     const expected = await totpAt(secretB32, counter + d);
     if (timingSafeEqualStr(expected, code)) return counter + d;
   }

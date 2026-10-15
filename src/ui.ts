@@ -11,6 +11,7 @@ const UI = {
     // auth / setup / consent
     email: "Email",
     forgot: "Forgot password?",
+    clock_skew: "Your device clock differs from the server by about {s} seconds, so authenticator codes will not match. Set your phone's date and time to automatic (in Google Authenticator: Settings → Time correction for codes → Sync now).",
     no_account: "New here?",
     create_account: "Create account",
     have_account: "Already have an account?",
@@ -317,6 +318,7 @@ const UI = {
   tr: {
     email: "E-posta",
     forgot: "Parolamı unuttum",
+    clock_skew: "Cihazının saati sunucudan yaklaşık {s} saniye farklı, bu yüzden doğrulama kodları tutmaz. Telefonunun tarih ve saatini otomatik yap (Google Authenticator: Ayarlar → Kodlar için saat düzeltme → Şimdi senkronize et).",
     no_account: "Hesabınız yok mu?",
     create_account: "Hesap oluştur",
     have_account: "Zaten hesabınız var mı?",
@@ -680,9 +682,12 @@ ${error ? `<p class="notice err">${esc(error)}</p>` : ""}
 <div class="field"><div class="row between"><label class="lbl" for="p">${t(lang, "password")}</label><a class="tiny" href="/forgot">${t(lang, "forgot")}</a></div><input id="p" name="password" type="password" autocomplete="current-password" required maxlength="256"></div>
 <div class="field"><label class="lbl" for="c">${t(lang, "code")}</label><input id="c" name="code" inputmode="numeric" pattern="[0-9]{6}" autocomplete="one-time-code" maxlength="6" placeholder="123456"></div>
 <button type="submit" class="btn w100">${t(lang, "sign_in")}</button></form>
+<p id="skew" class="notice err hidden"></p>
 ${canSignup ? `<p class="small muted center-text">${t(lang, "no_account")} <a href="/signup">${t(lang, "create_account")}</a></p>` : ""}`,
     ),
     nonce,
+    // Compares the device clock with the server's (authenticator codes depend on it)
+    `const srv=${Date.now()},d=Math.round((Date.now()-srv)/1000);if(Math.abs(d)>20){const n=document.getElementById("skew");n.textContent=${JSON.stringify(t(lang, "clock_skew"))}.replace("{s}",Math.abs(d));n.classList.remove("hidden")}`,
   );
 }
 
